@@ -882,8 +882,10 @@ int iio_backend_data_transfer_addr(struct iio_backend *back, u32 address)
 }
 EXPORT_SYMBOL_NS_GPL(iio_backend_data_transfer_addr, IIO_BACKEND);
 
-static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev, const char *name,
-							 struct fwnode_handle *fwnode)
+static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev,
+							 const char *name,
+							 struct fwnode_handle *fwnode,
+							 bool optional)
 {
 	struct fwnode_handle *fwnode_back;
 	struct iio_backend *back;
@@ -893,17 +895,24 @@ static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev, con
 	if (name) {
 		ret = device_property_match_string(dev, "io-backend-names",
 						   name);
-		if (ret < 0)
+		if (ret < 0) {
+			if (optional && (ret == -ENOENT || ret == -ENODATA))
+				return NULL;
 			return ERR_PTR(ret);
+		}
 		index = ret;
 	} else {
 		index = 0;
 	}
 
 	fwnode_back = fwnode_find_reference(fwnode, "io-backends", index);
-	if (IS_ERR(fwnode))
-		return dev_err_cast_probe(dev, fwnode,
+	if (IS_ERR(fwnode_back)) {
+		if (optional && PTR_ERR(fwnode_back) == -ENOENT)
+			return NULL;
+
+		return dev_err_cast_probe(dev, fwnode_back,
 					  "Cannot get Firmware reference\n");
+	}
 
 	guard(mutex)(&iio_back_lock);
 	list_for_each_entry(back, &iio_back_list, entry) {
@@ -926,20 +935,22 @@ static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev, con
 }
 
 /**
- * devm_iio_backend_get - Device managed backend device get
+ * __devm_iio_backend_get_ext() - Device managed backend device get
  * @dev: Consumer device for the backend
  * @name: Backend name
+ * @optional: Whether the backend is optional or not
  *
  * Get's the backend associated with @dev.
  *
  * RETURNS:
  * A backend pointer, negative error pointer otherwise.
  */
-struct iio_backend *devm_iio_backend_get(struct device *dev, const char *name)
+struct iio_backend *__devm_iio_backend_get_ext(struct device *dev,
+					       const char *name, bool optional)
 {
-	return __devm_iio_backend_fwnode_get(dev, name, dev_fwnode(dev));
+	return __devm_iio_backend_fwnode_get(dev, name, dev_fwnode(dev), optional);
 }
-EXPORT_SYMBOL_NS_GPL(devm_iio_backend_get, IIO_BACKEND);
+EXPORT_SYMBOL_NS_GPL(__devm_iio_backend_get_ext, IIO_BACKEND);
 
 /**
  * devm_iio_backend_fwnode_get - Device managed backend firmware node get
@@ -956,7 +967,7 @@ struct iio_backend *devm_iio_backend_fwnode_get(struct device *dev,
 						const char *name,
 						struct fwnode_handle *fwnode)
 {
-	return __devm_iio_backend_fwnode_get(dev, name, fwnode);
+	return __devm_iio_backend_fwnode_get(dev, name, fwnode, false);
 }
 EXPORT_SYMBOL_NS_GPL(devm_iio_backend_fwnode_get, IIO_BACKEND);
 
