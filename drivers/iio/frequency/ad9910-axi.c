@@ -279,33 +279,41 @@ static int ad9910_axi_ext_info_get(struct iio_backend *back, uintptr_t private,
 	}
 }
 
-static const struct iio_chan_spec_ext_info ad9910_axi_pp_ext_info[] = {
+#define AD9910_AXI_BACKEND_EXT_INFO(_name, _private) { \
+	.name = _name, \
+	.shared = IIO_SEPARATE, \
+	.read = ad9910_axi_ext_info_get, \
+	.write = ad9910_axi_ext_info_set, \
+	.private = _private, \
+}
+
+static const struct iio_backend_chan_ext_info ad9910_axi_pp_ext_info[] = {
 	/*
 	 * Even though sampling_frequency is a standard IIO channel attribute,
 	 * we define it as an extended attribute here since the backend
 	 * channel extension mechanism is designed for extended attributes only.
 	 */
-	IIO_BACKEND_EX_INFO("sampling_frequency", IIO_SEPARATE, AD9910_AXI_PP_SAMPLE_RATE),
+	AD9910_AXI_BACKEND_EXT_INFO("sampling_frequency", AD9910_AXI_PP_SAMPLE_RATE),
 	{ }
 };
 
-static const struct iio_chan_spec_ext_info ad9910_axi_drg_ext_info[] = {
-	IIO_BACKEND_EX_INFO("control_en", IIO_SEPARATE, AD9910_AXI_DRG_CONTROL_EN),
-	IIO_BACKEND_EX_INFO("toggle_en", IIO_SEPARATE, AD9910_AXI_DRG_TOGGLE_EN),
-	IIO_BACKEND_EX_INFO("ramp_delay", IIO_SEPARATE, AD9910_AXI_DRG_RAMP_DELAY),
-	IIO_BACKEND_EX_INFO("burst_count", IIO_SEPARATE, AD9910_AXI_DRG_BURST_COUNT),
-	IIO_BACKEND_EX_INFO("burst_delay", IIO_SEPARATE, AD9910_AXI_DRG_BURST_DELAY),
+static const struct iio_backend_chan_ext_info ad9910_axi_drg_ext_info[] = {
+	AD9910_AXI_BACKEND_EXT_INFO("control_en", AD9910_AXI_DRG_CONTROL_EN),
+	AD9910_AXI_BACKEND_EXT_INFO("toggle_en", AD9910_AXI_DRG_TOGGLE_EN),
+	AD9910_AXI_BACKEND_EXT_INFO("ramp_delay", AD9910_AXI_DRG_RAMP_DELAY),
+	AD9910_AXI_BACKEND_EXT_INFO("burst_count", AD9910_AXI_DRG_BURST_COUNT),
+	AD9910_AXI_BACKEND_EXT_INFO("burst_delay", AD9910_AXI_DRG_BURST_DELAY),
 	{ }
 };
 
 static int ad9910_axi_chan_spec(struct iio_backend *back,
-				struct iio_chan_spec *chan)
+				const struct iio_chan_spec *chan,
+				const struct iio_backend_chan_ext_info **ext_info)
 {
-	if (chan->channel == AD9910_CHANNEL_DRG) {
-		chan->ext_info = ad9910_axi_drg_ext_info;
-	} else if (chan->channel == AD9910_CHANNEL_PARALLEL_PORT) {
-		chan->ext_info = ad9910_axi_pp_ext_info;
-	}
+	if (chan->channel == AD9910_CHANNEL_DRG)
+		*ext_info = ad9910_axi_drg_ext_info;
+	else if (chan->channel == AD9910_CHANNEL_PARALLEL_PORT)
+		*ext_info = ad9910_axi_pp_ext_info;
 
 	return 0;
 }
@@ -351,8 +359,6 @@ static const struct iio_backend_ops ad9910_axi_iio_back_ops = {
 	.request_buffer = ad9910_axi_request_buffer,
 	.free_buffer = ad9910_axi_free_buffer,
 	.extend_chan_spec = ad9910_axi_chan_spec,
-	.ext_info_set = ad9910_axi_ext_info_set,
-	.ext_info_get = ad9910_axi_ext_info_get,
 	.set_sample_rate = ad9910_axi_set_sample_rate,
 	.debugfs_reg_access = iio_backend_debugfs_ptr(ad9910_axi_reg_access),
 	.scan_type_get = ad9910_axi_scan_type_get,

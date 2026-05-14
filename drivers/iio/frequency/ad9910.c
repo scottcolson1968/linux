@@ -2063,74 +2063,17 @@ static int ad9910_setup(struct ad9910_state *st, struct reset_control *dev_rst)
 	return ad9910_io_update(st);
 }
 
-static int ad9910_extend_channels(struct device *dev,
-				  struct iio_dev *indio_dev,
-				  struct iio_backend *iio_back)
+static int ad9910_extend_channels(struct iio_backend *iio_back)
 {
-	const struct iio_chan_spec_ext_info *orig_ext_info, *tmp_ext_info;
-	struct iio_chan_spec_ext_info *ext_info;
-	size_t orig_num, back_num, ext_info_sz;
-	struct iio_chan_spec *channels;
-	int ch_idx;
+	int ch_idx, ret;
 
-	/*
-	 * The channels already have extended attributes, so in order to be
-	 * able to extend them, channels are copied over and have a new ext_info
-	 * allocated that appends original channel ext info with the backend
-	 * provided ext info. This is needed because of the current design
-	 * limitations on the iio backend implementation to extend constant
-	 * channels with extended attributes.
-	 */
-	channels = devm_kzalloc(dev, sizeof(ad9910_channels), GFP_KERNEL);
-	if (!channels)
-		return -ENOMEM;
-
-	memcpy(channels, ad9910_channels, sizeof(ad9910_channels));
-
-	/*
-	 * Starting from the parallel port channel, allowing to any channel to
-	 * be extended by the backend.
-	 */
 	for (ch_idx = AD9910_CHAN_IDX_PARALLEL_PORT;
 	     ch_idx < ARRAY_SIZE(ad9910_channels); ch_idx++) {
-		orig_ext_info = channels[ch_idx].ext_info;
-		channels[ch_idx].ext_info = NULL;
-
-		iio_backend_extend_chan_spec(iio_back, &channels[ch_idx]);
-		if (!channels[ch_idx].ext_info) {
-			channels[ch_idx].ext_info = orig_ext_info;
-			continue;
-		}
-
-		if (!orig_ext_info)
-			continue;
-
-		orig_num = 0;
-		tmp_ext_info = orig_ext_info;
-		while (tmp_ext_info->name) {
-			tmp_ext_info++;
-			orig_num++;
-		}
-
-		back_num = 0;
-		tmp_ext_info = channels[ch_idx].ext_info;
-		while (tmp_ext_info->name) {
-			tmp_ext_info++;
-			back_num++;
-		}
-
-		ext_info_sz = sizeof(*ext_info) * (orig_num + back_num + 1);
-		ext_info = devm_kzalloc(dev, ext_info_sz, GFP_KERNEL);
-		if (!ext_info)
-			return -ENOMEM;
-
-		memcpy(ext_info, orig_ext_info, sizeof(*ext_info) * orig_num);
-		memcpy(ext_info + orig_num, channels[ch_idx].ext_info,
-		       sizeof(*ext_info) * back_num);
-		channels[ch_idx].ext_info = ext_info;
+		ret = iio_backend_extend_chan_spec(iio_back,
+						  &ad9910_channels[ch_idx]);
+		if (ret)
+			return ret;
 	}
-
-	indio_dev->channels = channels;
 
 	return 0;
 }
@@ -2242,7 +2185,7 @@ static int ad9910_probe(struct spi_device *spi)
 			return dev_err_probe(dev, ret,
 					     "failed to request iio backend buffer\n");
 
-		ret = ad9910_extend_channels(dev, indio_dev, st->back->iio_back);
+		ret = ad9910_extend_channels(st->back->iio_back);
 		if (ret)
 			return dev_err_probe(dev, ret,
 					     "failed to extend iio channels\n");
