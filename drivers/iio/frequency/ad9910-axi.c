@@ -344,15 +344,6 @@ static int ad9910_axi_reg_access(struct iio_backend *back, unsigned int reg,
 	return regmap_write(st->regmap, reg, writeval);
 }
 
-static int ad9910_axi_scan_type_get(struct iio_backend *back,
-				    const struct iio_chan_spec *chan)
-{
-	if (chan->channel != AD9910_CHANNEL_PARALLEL_PORT)
-		return -EINVAL;
-
-	return AD9910_PP_SCAN_TYPE_FULL;
-}
-
 static const struct iio_backend_ops ad9910_axi_iio_back_ops = {
 	.chan_enable = ad9910_axi_chan_enable,
 	.chan_disable = ad9910_axi_chan_disable,
@@ -361,7 +352,6 @@ static const struct iio_backend_ops ad9910_axi_iio_back_ops = {
 	.extend_chan_spec = ad9910_axi_chan_spec,
 	.set_sample_rate = ad9910_axi_set_sample_rate,
 	.debugfs_reg_access = iio_backend_debugfs_ptr(ad9910_axi_reg_access),
-	.scan_type_get = ad9910_axi_scan_type_get,
 };
 
 static int ad9910_axi_profile_set(struct iio_backend *back,

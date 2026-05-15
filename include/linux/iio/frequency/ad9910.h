@@ -80,17 +80,6 @@ enum ad9910_reset_ctrl_id {
 };
 
 /**
- * enum ad9910_pp_scan_type - Parallel Port scan types
- *
- * @AD9910_PP_SCAN_TYPE_FULL: Scan type with both format and data bits
- * @AD9910_PP_SCAN_TYPE_DATA_ONLY: Scan type with only data bits
- */
-enum ad9910_pp_scan_type {
-	AD9910_PP_SCAN_TYPE_FULL,
-	AD9910_PP_SCAN_TYPE_DATA_ONLY,
-};
-
-/**
  * enum ad9910_drg_oper_mode - Digital Ramp Generator Operating Mode
  *
  * @AD9910_DRG_OPER_MODE_BIDIR: Normal Ramp Generation

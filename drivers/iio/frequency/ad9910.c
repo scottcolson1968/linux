@@ -1040,21 +1040,6 @@ static const struct iio_chan_spec_ext_info ad9910_osk_ext_info[] = {
 	{ }
 };
 
-static const struct iio_scan_type ad9910_pp_scan_type[] = {
-	[AD9910_PP_SCAN_TYPE_FULL] = {
-		.sign = 'u',
-		.realbits = 18,
-		.storagebits = 32,
-		.shift = 0,
-	},
-	[AD9910_PP_SCAN_TYPE_DATA_ONLY] ={
-		.sign = 'u',
-		.realbits = 16,
-		.storagebits = 16,
-		.shift = 0,
-	},
-};
-
 #define AD9910_PROFILE_CHAN(idx) {				\
 	.type = IIO_ALTVOLTAGE,					\
 	.indexed = 1,						\
@@ -1094,10 +1079,13 @@ static const struct iio_chan_spec ad9910_channels[] = {
 		.channel = AD9910_CHANNEL_PARALLEL_PORT,
 		.address = AD9910_CHAN_IDX_PARALLEL_PORT,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_ENABLE),
-		.ext_scan_type = ad9910_pp_scan_type,
-		.num_ext_scan_type = ARRAY_SIZE(ad9910_pp_scan_type),
+		.scan_type = {
+			.sign = 'u',
+			.realbits = 18, /* (format + data) at the moment */
+			.storagebits = 32,
+			.shift = 0,
+		},
 		.ext_info = ad9910_pp_ext_info,
-		.has_ext_scan_type = 1
 	},
 	[AD9910_CHAN_IDX_DRG] = {
 		.type = IIO_ALTVOLTAGE,
@@ -1682,20 +1670,6 @@ static int ad9910_write_raw_get_fmt(struct iio_dev *indio_dev,
 	}
 }
 
-static int ad9910_get_current_scan_type(const struct iio_dev *indio_dev,
-					const struct iio_chan_spec *chan)
-{
-	struct ad9910_state *st = iio_priv(indio_dev);
-
-	if (chan->channel != AD9910_CHANNEL_PARALLEL_PORT)
-		return -EINVAL;
-
-	if (st->back)
-		return iio_backend_scan_type_get(st->back, chan);
-
-	return AD9910_PP_SCAN_TYPE_FULL;
-}
-
 static int ad9910_debugfs_reg_read(struct ad9910_state *st, bool high32,
 				   unsigned int reg, unsigned int *readval)
 {
@@ -1919,7 +1893,6 @@ static const struct iio_info ad9910_info = {
 	.write_raw = ad9910_write_raw,
 	.write_raw_get_fmt = ad9910_write_raw_get_fmt,
 	.read_label = ad9910_read_label,
-	.get_current_scan_type = ad9910_get_current_scan_type,
 	.debugfs_reg_access = &ad9910_debugfs_reg_access,
 };
 
