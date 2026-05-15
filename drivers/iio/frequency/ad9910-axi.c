@@ -364,10 +364,10 @@ static const struct iio_backend_ops ad9910_axi_iio_back_ops = {
 	.scan_type_get = ad9910_axi_scan_type_get,
 };
 
-static int ad9910_axi_profile_set(struct ad9910_backend *back,
+static int ad9910_axi_profile_set(struct iio_backend *back,
 				  unsigned int profile)
 {
-	struct ad9910_axi_state *st = iio_backend_get_priv(back->iio_back);
+	struct ad9910_axi_state *st = iio_backend_get_priv(back);
 
 	guard(mutex)(&st->lock);
 
@@ -376,9 +376,9 @@ static int ad9910_axi_profile_set(struct ad9910_backend *back,
 				  FIELD_PREP(AD9910_AXI_REG_PROFILE_MSK, profile));
 }
 
-static int ad9910_axi_io_update(struct ad9910_backend *back)
+static int ad9910_axi_io_update(struct iio_backend *back)
 {
-	struct ad9910_axi_state *st = iio_backend_get_priv(back->iio_back);
+	struct ad9910_axi_state *st = iio_backend_get_priv(back);
 
 	guard(mutex)(&st->lock);
 
@@ -386,10 +386,10 @@ static int ad9910_axi_io_update(struct ad9910_backend *back)
 			       AD9910_AXI_REG_IO_UPDATE_MSK);
 }
 
-static int ad9910_axi_drg_oper_mode_set(struct ad9910_backend *back,
+static int ad9910_axi_drg_oper_mode_set(struct iio_backend *back,
 					enum ad9910_drg_oper_mode mode)
 {
-	struct ad9910_axi_state *st = iio_backend_get_priv(back->iio_back);
+	struct ad9910_axi_state *st = iio_backend_get_priv(back);
 
 	guard(mutex)(&st->lock);
 
@@ -398,10 +398,10 @@ static int ad9910_axi_drg_oper_mode_set(struct ad9910_backend *back,
 				  FIELD_PREP(AD9910_AXI_REG_DRG_OPER_MODE_MSK, mode));
 }
 
-static int ad9910_axi_powerdown_set(struct ad9910_backend *back,
+static int ad9910_axi_powerdown_set(struct iio_backend *back,
 				    unsigned int enable)
 {
-	struct ad9910_axi_state *st = iio_backend_get_priv(back->iio_back);
+	struct ad9910_axi_state *st = iio_backend_get_priv(back);
 
 	guard(mutex)(&st->lock);
 

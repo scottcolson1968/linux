@@ -14,8 +14,6 @@
 #define AD9910_NUM_PROFILES	8
 #define AD9910_RAM_FW_MAGIC	0x00AD9910
 
-struct ad9910_backend;
-
 /**
  * enum ad9910_channel - AD9910 channel identifiers
  *
@@ -158,11 +156,11 @@ struct ad9910_ram_fw {
  * @powerdown_set:	Set the Powerdown state
  */
 struct ad9910_backend_ops {
-	int (*profile_set)(struct ad9910_backend *back, unsigned int profile);
-	int (*io_update)(struct ad9910_backend *back);
-	int (*drg_oper_mode_set)(struct ad9910_backend *back,
+	int (*profile_set)(struct iio_backend *back, unsigned int profile);
+	int (*io_update)(struct iio_backend *back);
+	int (*drg_oper_mode_set)(struct iio_backend *back,
 				 enum ad9910_drg_oper_mode mode);
-	int (*powerdown_set)(struct ad9910_backend *back, unsigned int enable);
+	int (*powerdown_set)(struct iio_backend *back, unsigned int enable);
 };
 
 /**
@@ -174,37 +172,6 @@ struct ad9910_backend_info {
 	struct iio_backend_info base;
 	const struct ad9910_backend_ops *ops;
 };
-
-/**
- * struct ad9910_backend - AD9910 Backend structure
- * @iio_back: IIO backend instance
- * @ops: AD9910 backend operations
- */
-struct ad9910_backend {
-	struct iio_backend *iio_back;
-	const struct ad9910_backend_ops *ops;
-};
-
-#define ad9910_backend_check_op(back, op) ({ \
-	struct ad9910_backend *____back = back;			\
-	int ____ret = 0;					\
-								\
-	if (!____back->ops->op)					\
-		____ret = -EOPNOTSUPP;				\
-								\
-	____ret;						\
-})
-
-#define ad9910_backend_op_call(back, op, args...) ({		\
-	struct ad9910_backend *__back = back;			\
-	int __ret;						\
-								\
-	__ret = ad9910_backend_check_op(__back, op);		\
-	if (!__ret)						\
-		__ret = __back->ops->op(__back, ##args);	\
-								\
-	__ret;							\
-})
 
 int devm_ad9910_backend_register(struct device *dev,
 				 const struct ad9910_backend_info *info,

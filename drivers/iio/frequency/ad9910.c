@@ -276,13 +276,16 @@ union ad9910_reg {
 
 struct ad9910_state {
 	struct spi_device *spi;
-	struct ad9910_backend *back;
 	struct clk *refclk;
 	struct fw_upload *ram_fwu;
 
 	struct gpio_desc *gpio_pwdown;
 	struct gpio_desc *gpio_update;
 	struct gpio_descs *gpio_profile;
+
+	/* ad9910 backend control */
+	struct iio_backend *back;
+	const struct ad9910_backend_ops *back_ops;
 
 	/* cached registers */
 	union ad9910_reg reg[AD9910_REG_NUM_CACHED];
@@ -316,23 +319,17 @@ struct ad9910_state {
 	u8 tx_buf[AD9910_SPI_MESSAGE_LEN_MAX] __aligned(IIO_DMA_MINALIGN);
 };
 
-/* Helper struct to manage AD9910 backend registrations */
-struct ad9910_backend_entry {
-	struct list_head head;
-	struct ad9910_backend backend;
-	void *priv;
-};
+#define ad9910_backend_op_call(st, op, args...) ({			\
+	int __ret = -EOPNOTSUPP;					\
+									\
+	if (st->back_ops->op)						\
+		__ret = st->back_ops->op(st->back, ## args);		\
+									\
+	__ret;								\
+})
 
-static LIST_HEAD(ad9910_backend_list);
-static DEFINE_MUTEX(ad9910_backend_lock);
-
-static void ad9910_backend_unregister(void *arg)
-{
-	struct ad9910_backend_entry *entry = arg;
-
-	guard(mutex)(&ad9910_backend_lock);
-	list_del(&entry->head);
-}
+/* Id to validate AD9910 backends */
+static const char ad9910_back_type_tag;
 
 /**
  * devm_ad9910_backend_register - Device managed AD9910 backend device register
@@ -340,7 +337,7 @@ static void ad9910_backend_unregister(void *arg)
  * @info: AD9910 Backend info
  * @priv: Device private data
  *
- * @info and @priv are mandatory. Not providing them results in -EINVAL.
+ * @info with AD9910 ops is mandatory. Not providing it results in -EINVAL.
  *
  * RETURNS:
  * 0 on success, negative error number on failure.
@@ -349,54 +346,30 @@ int devm_ad9910_backend_register(struct device *dev,
 				 const struct ad9910_backend_info *info,
 				 void *priv)
 {
-	struct ad9910_backend_entry *entry;
-	int ret;
+	if (!info || !info->ops)
+		return dev_err_probe(dev, -EINVAL, "No ad9910 backend ops\n");
 
-	if (!info || !info->ops || !priv)
-		return dev_err_probe(dev, -EINVAL,
-				     "No backend ops or priv provided\n");
-
-	ret = devm_iio_backend_register(dev, &info->base, priv);
-	if (ret)
-		return ret;
-
-	entry = devm_kzalloc(dev, sizeof(*entry), GFP_KERNEL);
-	if (!entry)
-		return -ENOMEM;
-
-	entry->priv = priv;
-	entry->backend.ops = info->ops;
-	scoped_guard(mutex, &ad9910_backend_lock)
-		list_add(&entry->head, &ad9910_backend_list);
-
-	return devm_add_action_or_reset(dev, ad9910_backend_unregister, entry);
+	return devm_iio_backend_register_typed(dev, &info->base, priv,
+					       &ad9910_back_type_tag);
 }
 EXPORT_SYMBOL_NS_GPL(devm_ad9910_backend_register, AD9910);
 
-static struct ad9910_backend *devm_ad9910_backend_get_optional(struct device *dev)
+static int devm_ad9910_backend_get_optional(struct ad9910_state *st)
 {
-	struct ad9910_backend_entry *entry;
-	struct iio_backend *iio_back;
-	void *priv;
+	const struct ad9910_backend_info *info;
 
-	iio_back = devm_iio_backend_get_optional(dev, NULL);
-	if (IS_ERR(iio_back))
-		return ERR_CAST(iio_back);
+	st->back = devm_iio_backend_get_optional_typed(&st->spi->dev, NULL,
+						       &ad9910_back_type_tag);
+	if (IS_ERR(st->back))
+		return PTR_ERR(st->back);
 
-	if (!iio_back)
-		return NULL;
+	if (!st->back)
+		return 0;
 
-	/* make sure backend was registered as an ad9910_backend */
-	priv = iio_backend_get_priv(iio_back);
-	guard(mutex)(&ad9910_backend_lock);
-	list_for_each_entry(entry, &ad9910_backend_list, head) {
-		if (entry->priv == priv) {
-			entry->backend.iio_back = iio_back;
-			return &entry->backend;
-		}
-	}
-
-	return ERR_PTR(-ENODEV);
+	info = container_of(iio_backend_get_info(st->back),
+			    const struct ad9910_backend_info, base);
+	st->back_ops = info->ops;
+	return 0;
 }
 
 /**
@@ -438,7 +411,7 @@ static inline u64 ad9910_st_profile_val(struct ad9910_state *st, u8 profile)
 static int ad9910_io_update(struct ad9910_state *st)
 {
 	if (st->back)
-		return ad9910_backend_op_call(st->back, io_update);
+		return ad9910_backend_op_call(st, io_update);
 
 	if (st->gpio_update) {
 		gpiod_set_value_cansleep(st->gpio_update, 1);
@@ -596,7 +569,7 @@ static int ad9910_set_sysclk_freq(struct ad9910_state *st, u32 freq_hz,
 
 	st->data.sysclk_freq_hz = sysclk_freq_hz;
 	if (st->back)
-		return iio_backend_set_sampling_freq(st->back->iio_back,
+		return iio_backend_set_sampling_freq(st->back,
 						     AD9910_CHANNEL_PARALLEL_PORT,
 						     st->data.sysclk_freq_hz / 4);
 
@@ -609,7 +582,7 @@ static int ad9910_profile_set(struct ad9910_state *st, u8 profile)
 
 	st->profile = profile;
 	if (st->back)
-		return ad9910_backend_op_call(st->back, profile_set, profile);
+		return ad9910_backend_op_call(st, profile_set, profile);
 
 	values[0] = profile;
 	gpiod_multi_set_value_cansleep(st->gpio_profile, values);
@@ -620,7 +593,7 @@ static int ad9910_profile_set(struct ad9910_state *st, u8 profile)
 static int ad9910_powerdown_set(struct ad9910_state *st, bool enable)
 {
 	if (st->back)
-		return ad9910_backend_op_call(st->back, powerdown_set, enable);
+		return ad9910_backend_op_call(st, powerdown_set, enable);
 
 	gpiod_set_value_cansleep(st->gpio_pwdown, enable);
 	return 0;
@@ -1383,10 +1356,10 @@ static int ad9910_write_raw(struct iio_dev *indio_dev,
 		case AD9910_CHANNEL_PARALLEL_PORT:
 			if (st->back) {
 				if (val)
-					iio_backend_chan_enable(st->back->iio_back,
+					iio_backend_chan_enable(st->back,
 								chan->channel);
 				else
-					iio_backend_chan_disable(st->back->iio_back,
+					iio_backend_chan_disable(st->back,
 								 chan->channel);
 			}
 
@@ -1410,7 +1383,7 @@ static int ad9910_write_raw(struct iio_dev *indio_dev,
 			if (st->back) {
 				tmp32 = FIELD_GET(AD9910_CFR2_DRG_NO_DWELL_MSK,
 						  st->reg[AD9910_REG_CFR2].val32);
-				ad9910_backend_op_call(st->back, drg_oper_mode_set, tmp32);
+				ad9910_backend_op_call(st, drg_oper_mode_set, tmp32);
 			}
 			return 0;
 		case AD9910_CHANNEL_DRG_RAMP_DOWN:
@@ -1424,7 +1397,7 @@ static int ad9910_write_raw(struct iio_dev *indio_dev,
 			if (st->back) {
 				tmp32 = FIELD_GET(AD9910_CFR2_DRG_NO_DWELL_MSK,
 						  st->reg[AD9910_REG_CFR2].val32);
-				ad9910_backend_op_call(st->back, drg_oper_mode_set, tmp32);
+				ad9910_backend_op_call(st, drg_oper_mode_set, tmp32);
 			}
 			return 0;
 		case AD9910_CHANNEL_RAM:
@@ -1718,7 +1691,7 @@ static int ad9910_get_current_scan_type(const struct iio_dev *indio_dev,
 		return -EINVAL;
 
 	if (st->back)
-		return iio_backend_scan_type_get(st->back->iio_back, chan);
+		return iio_backend_scan_type_get(st->back, chan);
 
 	return AD9910_PP_SCAN_TYPE_FULL;
 }
@@ -2063,14 +2036,13 @@ static int ad9910_setup(struct ad9910_state *st, struct reset_control *dev_rst)
 	return ad9910_io_update(st);
 }
 
-static int ad9910_extend_channels(struct iio_backend *iio_back)
+static int ad9910_extend_channels(struct iio_backend *back)
 {
 	int ch_idx, ret;
 
 	for (ch_idx = AD9910_CHAN_IDX_PARALLEL_PORT;
 	     ch_idx < ARRAY_SIZE(ad9910_channels); ch_idx++) {
-		ret = iio_backend_extend_chan_spec(iio_back,
-						  &ad9910_channels[ch_idx]);
+		ret = iio_backend_extend_chan_spec(back, &ad9910_channels[ch_idx]);
 		if (ret)
 			return ret;
 	}
@@ -2106,8 +2078,8 @@ static void ad9910_debugfs_init(struct ad9910_state *st,
 	snprintf(buf, sizeof(buf), "/sys/class/firmware/%s/data", st->ram_fwu_name);
 	debugfs_create_symlink("ram_data", iio_get_debugfs_dentry(indio_dev), buf);
 
-	if(st->back) {
-		iio_backend_debugfs_add(st->back->iio_back, indio_dev);
+	if (st->back) {
+		iio_backend_debugfs_add(st->back, indio_dev);
 		debugfs_create_symlink("backend0_reg_access",
 				       iio_get_debugfs_dentry(indio_dev),
 				       "./backend0/direct_reg_access");
@@ -2157,9 +2129,9 @@ static int ad9910_probe(struct spi_device *spi)
 		return dev_err_probe(dev, PTR_ERR(dev_rst),
 				     "failed to get device reset control\n");
 
-	st->back = devm_ad9910_backend_get_optional(dev);
-	if (IS_ERR(st->back))
-		return dev_err_probe(dev, PTR_ERR(st->back),
+	ret = devm_ad9910_backend_get_optional(st);
+	if (ret)
+		return dev_err_probe(dev, ret,
 				     "failed to get iio backend\n");
 
 	/*
@@ -2179,13 +2151,12 @@ static int ad9910_probe(struct spi_device *spi)
 			return dev_err_probe(dev, ret,
 					     "failed to deassert io reset control\n");
 
-		ret = devm_iio_backend_request_buffer(dev, st->back->iio_back,
-						      indio_dev);
+		ret = devm_iio_backend_request_buffer(dev, st->back, indio_dev);
 		if (ret)
 			return dev_err_probe(dev, ret,
 					     "failed to request iio backend buffer\n");
 
-		ret = ad9910_extend_channels(st->back->iio_back);
+		ret = ad9910_extend_channels(st->back);
 		if (ret)
 			return dev_err_probe(dev, ret,
 					     "failed to extend iio channels\n");
