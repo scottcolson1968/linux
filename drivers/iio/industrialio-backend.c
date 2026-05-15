@@ -52,12 +52,12 @@
 
 struct iio_backend {
 	struct list_head entry;
-	const struct iio_backend_ops *ops;
+	const struct iio_backend_info *info;
+	const void *type;
 	struct device *frontend_dev;
 	struct device *dev;
 	struct module *owner;
 	void *priv;
-	const char *name;
 	struct list_head attr_list;
 	struct attribute_group attr_group;
 	unsigned int cached_reg_addr;
@@ -106,7 +106,7 @@ static DEFINE_MUTEX(iio_back_lock);
 	struct iio_backend *____back = back;				\
 	int ____ret = 0;						\
 									\
-	if (!____back->ops->op)						\
+	if (!____back->info->ops->op)					\
 		____ret = -EOPNOTSUPP;					\
 									\
 	____ret;							\
@@ -118,7 +118,7 @@ static DEFINE_MUTEX(iio_back_lock);
 								\
 	__ret = iio_backend_check_op(__back, op);		\
 	if (!__ret)						\
-		__ret = __back->ops->op(__back, ##args);	\
+		__ret = __back->info->ops->op(__back, ##args);	\
 								\
 	__ret;							\
 })
@@ -132,7 +132,7 @@ static DEFINE_MUTEX(iio_back_lock);
 	if (__ret)						\
 		ptr_err = ERR_PTR(__ret);			\
 	else							\
-		ptr_err = __back->ops->op(__back, ##args);	\
+		ptr_err = __back->info->ops->op(__back, ##args);\
 								\
 	ptr_err;						\
 })
@@ -143,7 +143,7 @@ static DEFINE_MUTEX(iio_back_lock);
 								\
 	__ret = iio_backend_check_op(__back, op);		\
 	if (!__ret)						\
-		__back->ops->op(__back, ##args);		\
+		__back->info->ops->op(__back, ##args);		\
 	else							\
 		dev_dbg(__back->dev, "Op(%s) not implemented\n",\
 			__stringify(op));			\
@@ -212,7 +212,7 @@ static ssize_t iio_backend_debugfs_read_name(struct file *file,
 	char name[128];
 	int len;
 
-	len = scnprintf(name, sizeof(name), "%s\n", back->name);
+	len = scnprintf(name, sizeof(name), "%s\n", back->info->name);
 
 	return simple_read_from_buffer(userbuf, count, ppos, name, len);
 }
@@ -236,7 +236,7 @@ void iio_backend_debugfs_add(struct iio_backend *back,
 
 	if (!IS_ENABLED(CONFIG_DEBUG_FS) || !d)
 		return;
-	if (!back->ops->debugfs_reg_access && !back->name)
+	if (!back->info->ops->debugfs_reg_access && !back->info->name)
 		return;
 
 	snprintf(name, sizeof(name), "backend%d", back->idx);
@@ -245,11 +245,11 @@ void iio_backend_debugfs_add(struct iio_backend *back,
 	if (IS_ERR(back_d))
 		return;
 
-	if (back->ops->debugfs_reg_access)
+	if (back->info->ops->debugfs_reg_access)
 		debugfs_create_file("direct_reg_access", 0600, back_d, back,
 				    &iio_backend_debugfs_reg_fops);
 
-	if (back->name)
+	if (back->info->name)
 		debugfs_create_file("name", 0400, back_d, back,
 				    &iio_backend_debugfs_name_fops);
 }
@@ -970,6 +970,7 @@ EXPORT_SYMBOL_NS_GPL(iio_backend_data_transfer_addr, IIO_BACKEND);
 static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev,
 							 const char *name,
 							 struct fwnode_handle *fwnode,
+							 const void *type,
 							 bool optional)
 {
 	struct fwnode_handle *fwnode_back;
@@ -1005,6 +1006,9 @@ static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev,
 			continue;
 
 		fwnode_handle_put(fwnode_back);
+		if (type && back->type != type)
+			return ERR_PTR(-ENODEV);
+
 		ret = __devm_iio_backend_get(dev, back);
 		if (ret)
 			return ERR_PTR(ret);
@@ -1023,6 +1027,7 @@ static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev,
  * __devm_iio_backend_get_ext() - Device managed backend device get
  * @dev: Consumer device for the backend
  * @name: Backend name
+ * @type: Optional interface type for matching, or NULL
  * @optional: Whether the backend is optional or not
  *
  * Get's the backend associated with @dev.
@@ -1031,9 +1036,12 @@ static struct iio_backend *__devm_iio_backend_fwnode_get(struct device *dev,
  * A backend pointer, negative error pointer otherwise.
  */
 struct iio_backend *__devm_iio_backend_get_ext(struct device *dev,
-					       const char *name, bool optional)
+					       const char *name,
+					       const void *type,
+					       bool optional)
 {
-	return __devm_iio_backend_fwnode_get(dev, name, dev_fwnode(dev), optional);
+	return __devm_iio_backend_fwnode_get(dev, name, dev_fwnode(dev), type,
+					     optional);
 }
 EXPORT_SYMBOL_NS_GPL(__devm_iio_backend_get_ext, IIO_BACKEND);
 
@@ -1052,7 +1060,7 @@ struct iio_backend *devm_iio_backend_fwnode_get(struct device *dev,
 						const char *name,
 						struct fwnode_handle *fwnode)
 {
-	return __devm_iio_backend_fwnode_get(dev, name, fwnode, false);
+	return __devm_iio_backend_fwnode_get(dev, name, fwnode, NULL, false);
 }
 EXPORT_SYMBOL_NS_GPL(devm_iio_backend_fwnode_get, IIO_BACKEND);
 
@@ -1101,6 +1109,16 @@ void *iio_backend_get_priv(const struct iio_backend *back)
 }
 EXPORT_SYMBOL_NS_GPL(iio_backend_get_priv, IIO_BACKEND);
 
+/**
+ * iio_backend_get_info - Get backend info
+ * @back: Backend device
+ */
+const struct iio_backend_info *iio_backend_get_info(const struct iio_backend *back)
+{
+	return back->info;
+}
+EXPORT_SYMBOL_NS_GPL(iio_backend_get_info, IIO_BACKEND);
+
 static void iio_backend_unregister(void *arg)
 {
 	struct iio_backend *back = arg;
@@ -1110,18 +1128,20 @@ static void iio_backend_unregister(void *arg)
 }
 
 /**
- * devm_iio_backend_register - Device managed backend device register
+ * __devm_iio_backend_register - Device managed backend device register
  * @dev: Backend device being registered
  * @info: Backend info
  * @priv: Device private data
+ * @type: Optional type tag for type backend matching
  *
  * @info is mandatory. Not providing it results in -EINVAL.
  *
  * RETURNS:
  * 0 on success, negative error number on failure.
  */
-int devm_iio_backend_register(struct device *dev,
-			      const struct iio_backend_info *info, void *priv)
+int __devm_iio_backend_register(struct device *dev,
+				const struct iio_backend_info *info,
+				void *priv, const void *type)
 {
 	struct iio_backend *back;
 
@@ -1138,8 +1158,8 @@ int devm_iio_backend_register(struct device *dev,
 	if (!back)
 		return -ENOMEM;
 
-	back->ops = info->ops;
-	back->name = info->name;
+	back->info = info;
+	back->type = type;
 	back->owner = dev->driver->owner;
 	back->dev = dev;
 	back->priv = priv;
@@ -1149,7 +1169,7 @@ int devm_iio_backend_register(struct device *dev,
 
 	return devm_add_action_or_reset(dev, iio_backend_unregister, back);
 }
-EXPORT_SYMBOL_NS_GPL(devm_iio_backend_register, IIO_BACKEND);
+EXPORT_SYMBOL_NS_GPL(__devm_iio_backend_register, IIO_BACKEND);
 
 MODULE_AUTHOR("Nuno Sa <nuno.sa@analog.com>");
 MODULE_DESCRIPTION("Framework to handle complex IIO aggregate devices");

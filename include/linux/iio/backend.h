@@ -210,9 +210,11 @@ int iio_backend_read_raw(struct iio_backend *back,
 int iio_backend_extend_chan_spec(struct iio_backend *back,
 				 const struct iio_chan_spec *chan);
 void *iio_backend_get_priv(const struct iio_backend *conv);
+const struct iio_backend_info *iio_backend_get_info(const struct iio_backend *back);
 
 struct iio_backend *__devm_iio_backend_get_ext(struct device *dev,
 					       const char *name,
+					       const void *type,
 					       bool optional);
 
 /**
@@ -226,7 +228,7 @@ struct iio_backend *__devm_iio_backend_get_ext(struct device *dev,
 static inline struct iio_backend *
 __must_check devm_iio_backend_get(struct device *dev, const char *name)
 {
-	return __devm_iio_backend_get_ext(dev, name, false);
+	return __devm_iio_backend_get_ext(dev, name, NULL, false);
 }
 
 /**
@@ -242,7 +244,26 @@ static inline struct iio_backend *
 __must_check devm_iio_backend_get_optional(struct device *dev,
 					   const char *name)
 {
-	return __devm_iio_backend_get_ext(dev, name, true);
+	return __devm_iio_backend_get_ext(dev, name, NULL, true);
+}
+
+/**
+ * devm_iio_backend_get_optional_typed() - Get optional device managed backend
+ * 					   that matches a type
+ * @dev: Consumer device for the backend
+ * @name: Backend name
+ * @type: Interface type for matching
+ *
+ * RETURNS:
+ * A backend pointer, NULL if the backend device is not found, negative error
+ * pointer otherwise.
+ */
+static inline struct iio_backend *
+__must_check devm_iio_backend_get_optional_typed(struct device *dev,
+						   const char *name,
+						   const void *type)
+{
+	return __devm_iio_backend_get_ext(dev, name, type, true);
 }
 
 struct iio_backend *devm_iio_backend_fwnode_get(struct device *dev,
@@ -252,8 +273,43 @@ struct iio_backend *
 __devm_iio_backend_get_from_fwnode_lookup(struct device *dev,
 					  struct fwnode_handle *fwnode);
 
-int devm_iio_backend_register(struct device *dev,
-			      const struct iio_backend_info *info, void *priv);
+int __devm_iio_backend_register(struct device *dev,
+				const struct iio_backend_info *info,
+				void *priv, const void *type);
+
+/**
+ * devm_iio_backend_register() - Register device managed backend device
+ * @dev: Backend device
+ * @info: Backend info structure
+ * @priv: Private data for the backend
+ *
+ * RETURNS:
+ * 0 on success, negative error number on failure.
+ */
+static inline int devm_iio_backend_register(struct device *dev,
+					    const struct iio_backend_info *info,
+					    void *priv)
+{
+	return __devm_iio_backend_register(dev, info, priv, NULL);
+}
+
+/**
+ * devm_iio_backend_register_typed() - Register device managed backend device
+ * 				       tagged with a type for matching
+ * @dev: Backend device
+ * @info: Backend info structure
+ * @priv: Private data for the backend
+ * @type: Type tag to match for
+ *
+ * RETURNS:
+ * 0 on success, negative error number on failure.
+ */
+static inline int devm_iio_backend_register_typed(struct device *dev,
+						  const struct iio_backend_info *info,
+						  void *priv, const void *type)
+{
+	return __devm_iio_backend_register(dev, info, priv, type);
+}
 
 static inline int iio_backend_read_scale(struct iio_backend *back,
 					 struct iio_chan_spec const *chan,
