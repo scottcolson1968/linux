@@ -1890,8 +1890,14 @@ static int ad7380_probe_spi_offload(struct iio_dev *indio_dev,
 		return dev_err_probe(dev, PTR_ERR(st->offload_trigger),
 				     "failed to get offload trigger\n");
 
+	/*
+	 * With N SDI lines each lane carries num_simult_channels/N channels
+	 * per conversion, so the readout keeps up with the full conversion
+	 * rate when enough lanes are present (ADI tree: st->num_sdi from
+	 * adi,num-sdi, parsed before this function is called).
+	 */
 	sample_rate = st->chip_info->max_conversion_rate_hz *
-		      AD7380_NUM_SDO_LINES / st->chip_info->num_simult_channels;
+		      st->num_sdi / st->chip_info->num_simult_channels;
 
 	st->sample_freq_range[0] = 1; /* min */
 	st->sample_freq_range[1] = 1; /* step */
@@ -2105,17 +2111,21 @@ static int ad7380_probe(struct spi_device *spi)
 		if (ret)
 			return ret;
 	} else {
-		ret = ad7380_probe_spi_offload(indio_dev, st);
-		if (ret)
-			return ret;
-
-		/* ADI tree extension to handle HDL with multiple SDI lines. */
+		/*
+		 * ADI tree extension to handle HDL with multiple SDI lines.
+		 * Must be parsed before ad7380_probe_spi_offload(), which
+		 * derives the max sample rate from the SDI line count.
+		 */
 		ret = device_property_read_u32(dev, "adi,num-sdi", &st->num_sdi);
 		if (ret == -EINVAL)
 			st->num_sdi = 1; /* default */
 		else if (ret)
 			return dev_err_probe(dev, ret,
 					     "Failed to read adi,num-sdi property\n");
+
+		ret = ad7380_probe_spi_offload(indio_dev, st);
+		if (ret)
+			return ret;
 	}
 
 	ret = ad7380_init(st, external_ref_en);
