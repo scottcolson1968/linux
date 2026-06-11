@@ -1,0 +1,344 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Analog Devices AD7383-4 on Digilent Genesys ZU-5EV (Zynq UltraScale+ XCZU5EV)
+ * https://www.analog.com/media/en/technical-documentation/data-sheets/ad7383-4-7384-4.pdf
+ * https://wiki.analog.com/resources/tools-software/linux-drivers/iio-adc/ad738x
+ * https://digilent.com/reference/programmable-logic/genesys-zu/start
+ *
+ * hdl_project: <ad738x_fmc/genesys_zu5ev>  (local port, not in upstream ADI hdl)
+ * board_revision: <>
+ *
+ * Board peripheral configuration derived from the Digilent Genesys ZU OOB
+ * PetaLinux project (github.com/Digilent/genesys-zu-os, 5ev/oob/master).
+ * PL node addresses/IRQs follow the ADI ZynqMP carrier conventions:
+ * 0x44axxxxx (Zynq-7000) -> 0x84axxxxx, ps-12 -> GIC 108, ps-13 -> GIC 109.
+ *
+ * Copyright (C) 2026 Analog Devices Inc.
+ */
+/dts-v1/;
+
+#include "zynqmp.dtsi"
+#include "zynqmp-clk-ccf.dtsi"
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/net/ti-dp83867.h>
+#include <dt-bindings/phy/phy.h>
+
+/ {
+	model = "Digilent Genesys ZU-5EV + EVAL-AD738x FMC";
+	compatible = "digilent,genesys-zu-5ev", "xlnx,zynqmp";
+
+	aliases {
+		ethernet0 = &gem0;
+		serial0 = &uart0;
+		serial1 = &uart1;
+		mmc0 = &sdhci0; /* eMMC */
+		mmc1 = &sdhci1; /* microSD */
+		spi0 = &qspi;
+	};
+
+	chosen {
+		bootargs = "earlycon console=ttyPS0,115200 root=/dev/mmcblk1p2 rw rootwait cma=512M";
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		/* 4 GiB DDR4: 2 GiB low + 2 GiB high; u-boot fixes this up anyway */
+		reg = <0x0 0x0 0x0 0x80000000>, <0x8 0x0 0x0 0x80000000>;
+	};
+
+	refclk2: psgtr_dp_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <108000000>;
+	};
+
+	refclk1: psgtr_sata_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <150000000>;
+	};
+
+	refclk0: psgtr_pcie_usb30_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <100000000>;
+	};
+
+	/* EVAL-AD738x supplies (fed from FMC rails) */
+	eval_u2: eval-board-u2-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "EVAL +3.3V supply (U2)";
+		regulator-always-on;
+	};
+
+	eval_u3: eval-board-u3-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "EVAL +3.3V supply (U3)";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	eval_u6: eval-board-vlogic-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "EVAL VLOGIC from FMC VADJ (1.8 V, LK5 5-6)";
+		regulator-always-on;
+	};
+
+	trigger_pwm: adc-pwm-trigger {
+		compatible = "pwm-trigger";
+		#trigger-source-cells = <0>;
+		pwms = <&adc_trigger 0 10000 0>;
+	};
+
+	vcm: vcm-regulator {
+		/*
+		 * External source that supplies common mode voltage for
+		 * negative inputs of the ADC. Assumed to be V_REF / 2.
+		 */
+		compatible = "regulator-fixed";
+		regulator-name = "External VCM supply";
+		regulator-min-microvolt = <1650000>;
+		regulator-max-microvolt = <1650000>;
+		regulator-always-on;
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&psgtr {
+	status = "okay";
+	clocks = <&refclk0>, <&refclk1>, <&refclk2>;
+	clock-names = "ref0", "ref1", "ref2";
+};
+
+/* microSD (boot/rootfs) — itap delays from Digilent OOB project.
+ * no-1-8-v: the boot slot signals at 3.3 V through a level shifter; UHS
+ * (1.8 V) negotiation "works" but corrupts the FAT on writes. Clamp to HS. */
+&sdhci1 {
+	status = "okay";
+	disable-wp;
+	no-1-8-v;
+	xlnx,itap-delay-sd-hsd = <0x29>;
+	xlnx,itap-delay-sd-ddr50 = <0x32>;
+	xlnx,itap-delay-sdr25 = <0x2A>;
+	xlnx,itap-delay-sdr50 = <0x1E>;
+	xlnx,itap-delay-sdr104 = <0x0B>;
+};
+
+/* eMMC (5EV only) */
+&sdhci0 {
+	status = "okay";
+	non-removable;
+	bus-width = <8>;
+};
+
+&gem0 {
+	status = "okay";
+	phy-handle = <&phy0>;
+	phy-mode = "rgmii-id";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	phy0: ethernet-phy@f {
+		reg = <0xF>;
+		reset-assert-us = <1>;
+		reset-deassert-us = <200>;
+		interrupt-parent = <&gpio>;
+		interrupts = <38 IRQ_TYPE_LEVEL_LOW>;
+		ti,rx-internal-delay = <DP83867_RGMIIDCTL_2_00_NS>;
+		ti,tx-internal-delay = <DP83867_RGMIIDCTL_1_50_NS>;
+		ti,fifo-depth = <DP83867_PHYCR_FIFO_DEPTH_4_B_NIB>;
+		ti,clk-output-sel = <DP83867_CLK_O_SEL_REF_CLK>;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	i2c-mux@70 {
+		compatible = "nxp,pca9548";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x70>;
+		reset-gpios = <&gpio 78 GPIO_ACTIVE_HIGH>;
+		i2c-mux-idle-disconnect;
+		i2c@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <3>;
+			pmu@13 { /* IRPS5401 - IC81 */
+				compatible = "infineon,irps5401";
+				reg = <0x13>;
+			};
+			pmu@14 { /* IRPS5401 - IC83 */
+				compatible = "infineon,irps5401";
+				reg = <0x14>;
+			};
+			pmu@15 { /* IRPS5401 - IC84 */
+				compatible = "infineon,irps5401";
+				reg = <0x15>;
+			};
+		};
+		i2c@4 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <4>;
+			eeprom@51 { /* FMC VITA 57.1 FRU */
+				compatible = "atmel,24c02";
+				reg = <0x51>;
+				pagesize = <1>;
+			};
+		};
+		i2c@5 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <5>;
+			eeprom@30 { /* SYZYGY DNA */
+				compatible = "atmel,24c02";
+				reg = <0x30>;
+				read-only;
+				address-width = <16>;
+				size = <65536>;
+			};
+		};
+	};
+};
+
+&qspi {
+	status = "okay";
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <80000000>;
+		spi-tx-bus-width = <1>;
+		spi-rx-bus-width = <1>;
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			partition@0 {
+				label = "boot";
+				reg = <0x00000000 0x00100000>;
+			};
+			partition@1 {
+				label = "bootenv";
+				reg = <0x00100000 0x00040000>;
+			};
+			partition@2 {
+				label = "kernel";
+				reg = <0x00140000 0x01600000>;
+			};
+			partition@3 {
+				label = "board-id";
+				reg = <0x1FFF000 0x1000>;
+				read-only;
+			};
+		};
+	};
+};
+
+&usb0 {
+	status = "okay";
+};
+
+&dwc3_0 {
+	status = "okay";
+	dr_mode = "host";
+	snps,usb3_lpm_capable;
+	phy-names = "usb3-phy";
+	phys = <&psgtr 1 PHY_TYPE_USB3 0 0>;
+	snps,dis_u2_susphy_quirk;
+	snps,dis_u3_susphy_quirk;
+	maximum-speed = "super-speed";
+};
+
+/* PL peripherals (ad738x_fmc_genesys_zu5ev HDL project) */
+/ {
+	fpga_axi: fpga-axi@0 {
+		interrupt-parent = <&gic>;
+		compatible = "simple-bus";
+		#address-cells = <0x1>;
+		#size-cells = <0x1>;
+		ranges = <0 0 0 0xffffffff>;
+
+		adc_trigger: pwm@84b00000 {
+			compatible = "adi,axi-pwmgen-2.00.a";
+			reg = <0x84b00000 0x1000>;
+			label = "adc_conversion_trigger";
+			#pwm-cells = <3>;
+			clocks = <&zynqmp_clk 71>, <&spi_clk>;
+			clock-names = "axi", "ext";
+		};
+
+		spi_clk: clock-controller@84a70000 {
+			compatible = "adi,axi-clkgen-2.00.a";
+			reg = <0x84a70000 0x1000>;
+			#clock-cells = <0>;
+			clocks = <&zynqmp_clk 71>, <&zynqmp_clk 71>;
+			clock-names = "clkin1", "s_axi_aclk";
+			clock-output-names = "spi_clk";
+			assigned-clocks = <&spi_clk>;
+			assigned-clock-rates = <160000000>;
+		};
+
+		rx_dma: dma-controller@84a30000 {
+			compatible = "adi,axi-dmac-1.00.a";
+			reg = <0x84a30000 0x1000>;
+			#dma-cells = <1>;
+			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>; /* ps-13 */
+			clocks = <&zynqmp_clk 71>;
+		};
+
+		axi_spi_engine_0: spi@84a00000 {
+			compatible = "adi,axi-spi-engine-1.00.a";
+			reg = <0x84a00000 0x1000>;
+			interrupts = <0 108 IRQ_TYPE_LEVEL_HIGH>; /* ps-12 */
+			clocks = <&zynqmp_clk 71>, <&spi_clk>;
+			clock-names = "s_axi_aclk", "spi_clk";
+
+			dmas = <&rx_dma 0>;
+			dma-names = "offload0-rx";
+			trigger-sources = <&trigger_pwm>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			adc@0 {
+				compatible = "adi,ad7383-4";
+				reg = <0>;
+
+				spi-cpol;
+				spi-max-frequency = <80000000>;
+
+				/*
+				 * ADI tree extension (not mainline). Must match the
+				 * HDL NUM_OF_SDI build argument. Omit if =1.
+				 */
+				adi,num-sdi = <4>;
+
+				vcc-supply = <&eval_u2>;
+				vlogic-supply = <&eval_u6>;
+				refio-supply = <&eval_u3>;
+
+				aina-supply = <&vcm>;
+				ainb-supply = <&vcm>;
+				ainc-supply = <&vcm>;
+				aind-supply = <&vcm>;
+			};
+		};
+	};
+};
+
+/* Genesys ZU PS_REF_CLK crystal is 30 MHz, not the 33.33 MHz assumed by
+ * zynqmp-clk-ccf.dtsi -- without this every PS clock computes 11% high.
+ */
+&pss_ref_clk {
+	clock-frequency = <30000000>;
+};
