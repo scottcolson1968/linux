@@ -167,7 +167,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0x70>;
-		reset-gpios = <&gpio 78 GPIO_ACTIVE_HIGH>;
+		/* mux reset pin (F6, fpga_mux_rst) is not driven by this PL design;
+		 * the board pull keeps it deasserted -- no reset GPIO. */
 		i2c-mux-idle-disconnect;
 		i2c@3 {
 			#address-cells = <1>;
@@ -268,6 +269,45 @@
 		#size-cells = <0x1>;
 		ranges = <0 0 0 0xffffffff>;
 
+		/* 10G Ethernet over SFP+: xxv_ethernet MAC + AXI DMA, xlnx
+		 * axienet driver. PCS/PMA BASE-R to the 10GBASE-T module.
+		 */
+		eth_mcdma: dma@84c10000 {
+			compatible = "xlnx,eth-dma";
+			reg = <0x84c10000 0x10000>;
+			/* 32-bit: axi_mcdma c_addr_width=32, low DDR via coherent HPC0
+			 * (was 40 for axi_dma). */
+			xlnx,addrwidth = <0x20>;
+			xlnx,include-dre;
+		};
+
+		xxv_eth: ethernet@84c00000 {
+			compatible = "xlnx,xxv-ethernet-1.0";
+			reg = <0x84c00000 0x10000>;
+			device_type = "network";
+			axistream-connected = <&eth_mcdma>;
+			/* MCDMA: 1 queue, chan id 1. The driver builds IRQ names
+			 * mm2s_ch1_introut / s2mm_ch1_introut and looks them up by
+			 * name ON THIS node. ps-10/ps-11 = GIC 106/107. */
+			xlnx,num-queues = /bits/ 16 <1>;
+			xlnx,channel-ids = "1";
+			interrupt-parent = <&gic>;
+			interrupts = <0 106 IRQ_TYPE_LEVEL_HIGH>,
+				     <0 107 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "mm2s_ch1_introut", "s2mm_ch1_introut";
+			local-mac-address = [00 0a 35 05 a1 10];
+			max-speed = <10000>;
+			phy-mode = "10gbase-r";
+			xlnx,rxmem = <0x6000>;
+			xlnx,txcsum = <0>;
+			xlnx,rxcsum = <0>;
+
+			fixed-link {
+				speed = <10000>;
+				full-duplex;
+			};
+		};
+
 		adc_trigger: pwm@84b00000 {
 			compatible = "adi,axi-pwmgen-2.00.a";
 			reg = <0x84b00000 0x1000>;
@@ -341,4 +381,86 @@
  */
 &pss_ref_clk {
 	clock-frequency = <30000000>;
+};
+
+/* Onboard WiFi: Microchip WILC3000 on PS SPI0 SS0 (the wilc1000 driver
+ * auto-detects the 3000 by chip id; firmware atmel/wilc3000_wifi_firmware-1.bin).
+ * Its CHIP_EN/RESET/IRQ pins live on the MCP23S08 SPI GPIO expander at SS1
+ * (same expander the Digilent FSBL patches drive at boot). Layout from the
+ * Digilent OOB system-user.dtsi.
+ */
+&spi0 {
+	status = "okay";
+
+	gpioexp: gpio@1 {
+		compatible = "microchip,mcp23s08";
+		reg = <1>; /* SS[1] */
+		spi-max-frequency = <10000000>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		microchip,spi-present-mask = <0x01>;
+		interrupt-parent = <&gpio>;
+		interrupts = <25 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+
+		/* USB PHY/hub resets, same values the Digilent FSBL programs;
+		 * the kernel driver resets the expander at probe, so hog them
+		 * or no USB device ever enumerates.
+		 */
+		usb20-reset-hog {
+			gpio-hog;
+			gpios = <4 GPIO_ACTIVE_HIGH>;
+			output-low; /* active-high PHY reset, idle low (FSBL DEFAULTS) */
+			line-name = "usb20-reset";
+		};
+		usb20h-reset-hog {
+			gpio-hog;
+			gpios = <5 GPIO_ACTIVE_HIGH>;
+			output-low; /* active-high PHY reset, idle low (FSBL DEFAULTS) */
+			line-name = "usb20h-reset";
+		};
+		usb20-hub-resetn-hog {
+			gpio-hog;
+			gpios = <6 GPIO_ACTIVE_HIGH>;
+			output-high;
+			line-name = "usb20-hub-resetn";
+		};
+	};
+
+	wifi@0 {
+		/* This board revision carries an ATWINC1500 (no Linux driver),
+		 * not the WILC3000 the Digilent OOB dts describes. Disabled.
+		 */
+		status = "disabled";
+		compatible = "microchip,wilc1000";
+		reg = <0>; /* SS[0] */
+		spi-max-frequency = <12000000>;
+		interrupt-parent = <&gpioexp>;
+		interrupts = <1 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&gpioexp 2 GPIO_ACTIVE_LOW>;
+		chip_en-gpios = <&gpioexp 0 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* PS GPIO controller: MIO pins (I2C-mux/expander IRQs) + EMIO (VADJ rescue
+ * lines 114/115). zynqmp.dtsi leaves it disabled.
+ */
+&gpio {
+	status = "okay";
+};
+
+/* USB1 = the dual Type-A host ports: USB3320 ULPI PHY + USB2513B hub
+ * (hub/PHY resets are the gpioexp hogs above). USB2-only, no GTR lane.
+ */
+&usb1 {
+	status = "okay";
+};
+
+&dwc3_1 {
+	status = "okay";
+	dr_mode = "host";
+	maximum-speed = "high-speed";
+	snps,dis_u2_susphy_quirk;
+	snps,dis_u3_susphy_quirk;
 };
