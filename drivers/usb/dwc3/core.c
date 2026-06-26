@@ -319,6 +319,54 @@ int dwc3_core_soft_reset(struct dwc3 *dwc)
 	    dwc->is_hibernated == true)
 		return 0;
 
+	/*
+	 * If the dr_mode is host and current_dr_role is not yet
+	 * DWC3_GCTL_PRTCAP_HOST, dwc3_core_init_mode() has not run yet. Ensure
+	 * the PHY is ready before the controller updates GCTL.PRTCAPDIR or
+	 * other settings by soft-resetting the PIPE3 (USB3) and USB2 PHYs.
+	 * Without this the DWC3 PIPE interface is not reset relative to the
+	 * generic PHY's phy_init(), and the SuperSpeed link fails to train on
+	 * cold boot (device falls back to USB2 high-speed) on ZynqMP host
+	 * controllers. Restored from v6.6 behaviour dropped during the dwc3
+	 * multiport rework; loops over all ports for multiport safety.
+	 */
+	if (dwc->dr_mode == USB_DR_MODE_HOST) {
+		u32 usb3_port;
+		u32 usb2_port;
+		int i;
+
+		for (i = 0; i < dwc->num_usb3_ports; i++) {
+			usb3_port = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(i));
+			usb3_port |= DWC3_GUSB3PIPECTL_PHYSOFTRST;
+			dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(i), usb3_port);
+		}
+
+		for (i = 0; i < dwc->num_usb2_ports; i++) {
+			usb2_port = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(i));
+			usb2_port |= DWC3_GUSB2PHYCFG_PHYSOFTRST;
+			dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(i), usb2_port);
+		}
+
+		/* Small delay for PHY reset assertion */
+		usleep_range(1000, 2000);
+
+		for (i = 0; i < dwc->num_usb3_ports; i++) {
+			usb3_port = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(i));
+			usb3_port &= ~DWC3_GUSB3PIPECTL_PHYSOFTRST;
+			dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(i), usb3_port);
+		}
+
+		for (i = 0; i < dwc->num_usb2_ports; i++) {
+			usb2_port = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(i));
+			usb2_port &= ~DWC3_GUSB2PHYCFG_PHYSOFTRST;
+			dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(i), usb2_port);
+		}
+
+		/* Wait for clock synchronization */
+		msleep(50);
+		return 0;
+	}
+
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	reg |= DWC3_DCTL_CSFTRST;
 	reg &= ~DWC3_DCTL_RUN_STOP;
@@ -1126,16 +1174,19 @@ static void dwc3_core_setup_global_control(struct dwc3 *dwc)
 			reg &= ~DWC3_GCTL_DSBLCLKGTNG;
 		break;
 	case DWC3_GHWPARAMS1_EN_PWROPT_HIB:
-		/* enable hibernation here */
-		dwc->nr_scratch = DWC3_GHWPARAMS4_HIBER_SCRATCHBUFS(hwparams4);
-		dwc->has_hibernation = 1;
-
 		/*
-		 * REVISIT Enabling this bit so that host-mode hibernation
-		 * will work. Device-mode hibernation is not yet implemented.
+		 * Device-mode hibernation is not implemented. Enabling the
+		 * scratchpad (has_hibernation/nr_scratch) in peripheral mode
+		 * makes the SET_SCRATCHPAD_ADDR DGCMD time out (-110) during
+		 * core init, because GBLHIBERNATIONEN is only set for host
+		 * mode. So only enable hibernation/scratch for host.
 		 */
-		if (dwc->dr_mode == USB_DR_MODE_HOST)
+		if (dwc->dr_mode == USB_DR_MODE_HOST) {
+			dwc->nr_scratch =
+				DWC3_GHWPARAMS4_HIBER_SCRATCHBUFS(hwparams4);
+			dwc->has_hibernation = 1;
 			reg |= DWC3_GCTL_GBLHIBERNATIONEN;
+		}
 		break;
 	default:
 		/* nothing */

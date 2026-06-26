@@ -192,15 +192,15 @@ static void wilc_wlan_power(struct wilc *wilc, bool on)
 
 	if (on) {
 		/* assert ENABLE: */
-		gpiod_set_value(gpios->enable, 1);
+		gpiod_set_value_cansleep(gpios->enable, 1);
 		mdelay(5);
 		/* deassert RESET: */
-		gpiod_set_value(gpios->reset, 0);
+		gpiod_set_value_cansleep(gpios->reset, 0);
 	} else {
 		/* assert RESET: */
-		gpiod_set_value(gpios->reset, 1);
+		gpiod_set_value_cansleep(gpios->reset, 1);
 		/* deassert ENABLE: */
-		gpiod_set_value(gpios->enable, 0);
+		gpiod_set_value_cansleep(gpios->enable, 0);
 	}
 }
 
@@ -241,18 +241,27 @@ static int wilc_bus_probe(struct spi_device *spi)
 
 	wilc_wlan_power(wilc, true);
 
+	/* Give the chip time to come out of reset before talking to it;
+	 * with expander-driven control lines the power-up is not instant.
+	 */
+	msleep(100);
+
 	ret = wilc_spi_configure_bus_protocol(wilc);
 	if (ret)
 		goto power_down;
 
-	ret = wilc_validate_chipid(wilc);
+	ret = wilc_get_chipid(wilc);
+	if (ret)
+		goto power_down;
+
+	ret = wilc_cfg80211_register(wilc);
 	if (ret)
 		goto power_down;
 
 	ret = wilc_load_mac_from_nv(wilc);
 	if (ret) {
 		pr_err("Can not retrieve MAC address from chip\n");
-		goto power_down;
+		goto unregister_wiphy;
 	}
 
 	wilc_wlan_power(wilc, false);
@@ -260,14 +269,17 @@ static int wilc_bus_probe(struct spi_device *spi)
 				   NL80211_IFTYPE_STATION, false);
 	if (IS_ERR(vif)) {
 		ret = PTR_ERR(vif);
-		goto power_down;
+		goto unregister_wiphy;
 	}
 	return 0;
 
+unregister_wiphy:
+	wiphy_unregister(wilc->wiphy);
 power_down:
 	wilc_wlan_power(wilc, false);
 netdev_cleanup:
 	wilc_netdev_cleanup(wilc);
+	wiphy_free(wilc->wiphy);
 free:
 	kfree(spi_priv);
 	return ret;
@@ -279,6 +291,8 @@ static void wilc_bus_remove(struct spi_device *spi)
 	struct wilc_spi *spi_priv = wilc->bus_data;
 
 	wilc_netdev_cleanup(wilc);
+	wiphy_unregister(wilc->wiphy);
+	wiphy_free(wilc->wiphy);
 	kfree(spi_priv);
 }
 
@@ -1229,7 +1243,7 @@ static int wilc_validate_chipid(struct wilc *wilc)
 		dev_err(&spi->dev, "Fail cmd read chip id...\n");
 		return ret;
 	}
-	if (!is_wilc1000(chipid)) {
+	if (!is_wilc1000(chipid) && !is_wilc3000(chipid)) {
 		dev_err(&spi->dev, "Unknown chip id 0x%x\n", chipid);
 		return -ENODEV;
 	}
