@@ -798,7 +798,7 @@ static const struct ad7380_chip_info ad7383_4_chip_info = {
 	.num_vcm_supplies = ARRAY_SIZE(ad7380_4_channel_vcm_supplies),
 	.available_scan_masks = ad7380_16_channel_scan_masks,
 	.timing_specs = &ad7380_4_timing,
-	.max_conversion_rate_hz = 4 * MEGA,
+	.max_conversion_rate_hz = 4096000,
 };
 
 static const struct ad7380_chip_info ad7384_4_chip_info = {
