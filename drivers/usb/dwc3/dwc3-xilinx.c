@@ -496,8 +496,13 @@ static int dwc3_xlnx_init_zynqmp(struct dwc3_xlnx *priv_data)
 	 * Therefore, skip these operations in this case.
 	 */
 	if (!priv_data->usb3_phy) {
-		/* Deselect the PIPE Clock Select bit in FPD PIPE Clock register */
-		writel(PIPE_CLK_DESELECT, priv_data->regs + XLNX_USB_FPD_PIPE_CLK);
+		/*
+		 * On this platform the usb3-phy phandle lives on the snps,dwc3
+		 * child node, so the wrapper's lookup returns NULL even when
+		 * SuperSpeed is in use. Do NOT deselect the FPD PIPE clock here:
+		 * the multiport rework added that write, which kills SuperSpeed on
+		 * ZynqMP (v6.6 left the PIPE clock as configured by the FSBL).
+		 */
 		goto skip_usb3_phy;
 	}
 
