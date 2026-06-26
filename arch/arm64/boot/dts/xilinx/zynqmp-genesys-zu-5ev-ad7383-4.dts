@@ -10,8 +10,9 @@
  *
  * Board peripheral configuration derived from the Digilent Genesys ZU OOB
  * PetaLinux project (github.com/Digilent/genesys-zu-os, 5ev/oob/master).
- * PL node addresses/IRQs follow the ADI ZynqMP carrier conventions:
- * 0x44axxxxx (Zynq-7000) -> 0x84axxxxx, ps-12 -> GIC 108, ps-13 -> GIC 109.
+ * PL peripherals match the GUI build (system_bd_gui.tcl): base 0xA00xxxxx,
+ * coherent HPC0 (dma-coherent on rx_dma + CCI-400 enabled).
+ * IRQs: eth ps-10/11 -> GIC 106/107, ps-12 -> GIC 108, ps-13 -> GIC 109.
  *
  * Copyright (C) 2026 Analog Devices Inc.
  */
@@ -272,18 +273,18 @@
 		/* 10G Ethernet over SFP+: xxv_ethernet MAC + AXI DMA, xlnx
 		 * axienet driver. PCS/PMA BASE-R to the 10GBASE-T module.
 		 */
-		eth_mcdma: dma@84c10000 {
+		eth_mcdma: dma@a0020000 {
 			compatible = "xlnx,eth-dma";
-			reg = <0x84c10000 0x10000>;
+			reg = <0xa0020000 0x10000>;
 			/* 32-bit: axi_mcdma c_addr_width=32, low DDR via coherent HPC0
 			 * (was 40 for axi_dma). */
 			xlnx,addrwidth = <0x20>;
 			xlnx,include-dre;
 		};
 
-		xxv_eth: ethernet@84c00000 {
+		xxv_eth: ethernet@a0060000 {
 			compatible = "xlnx,xxv-ethernet-1.0";
-			reg = <0x84c00000 0x10000>;
+			reg = <0xa0060000 0x10000>;
 			device_type = "network";
 			axistream-connected = <&eth_mcdma>;
 			/* MCDMA: 1 queue, chan id 1. The driver builds IRQ names
@@ -308,18 +309,18 @@
 			};
 		};
 
-		adc_trigger: pwm@84b00000 {
+		adc_trigger: pwm@a0050000 {
 			compatible = "adi,axi-pwmgen-2.00.a";
-			reg = <0x84b00000 0x1000>;
+			reg = <0xa0050000 0x1000>;
 			label = "adc_conversion_trigger";
 			#pwm-cells = <3>;
 			clocks = <&zynqmp_clk 71>, <&spi_clk>;
 			clock-names = "axi", "ext";
 		};
 
-		spi_clk: clock-controller@84a70000 {
+		spi_clk: clock-controller@a0040000 {
 			compatible = "adi,axi-clkgen-2.00.a";
-			reg = <0x84a70000 0x1000>;
+			reg = <0xa0040000 0x1000>;
 			#clock-cells = <0>;
 			clocks = <&zynqmp_clk 71>, <&zynqmp_clk 71>;
 			clock-names = "clkin1", "s_axi_aclk";
@@ -328,17 +329,19 @@
 			assigned-clock-rates = <160000000>;
 		};
 
-		rx_dma: dma-controller@84a30000 {
+		rx_dma: dma-controller@a0000000 {
 			compatible = "adi,axi-dmac-1.00.a";
-			reg = <0x84a30000 0x1000>;
+			reg = <0xa0000000 0x1000>;
 			#dma-cells = <1>;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>; /* ps-13 */
 			clocks = <&zynqmp_clk 71>;
+			/* coherent HPC0 path: DMA writes are cache-coherent (needs CCI). */
+			dma-coherent;
 		};
 
-		axi_spi_engine_0: spi@84a00000 {
+		axi_spi_engine_0: spi@a0030000 {
 			compatible = "adi,axi-spi-engine-1.00.a";
-			reg = <0x84a00000 0x1000>;
+			reg = <0xa0030000 0x1000>;
 			interrupts = <0 108 IRQ_TYPE_LEVEL_HIGH>; /* ps-12 */
 			clocks = <&zynqmp_clk 71>, <&spi_clk>;
 			clock-names = "s_axi_aclk", "spi_clk";
@@ -381,6 +384,13 @@
  */
 &pss_ref_clk {
 	clock-frequency = <30000000>;
+};
+
+/* CCI-400: cache-coherent interconnect for the PL coherent-HPC0 DMA path
+ * (rx_dma dma-coherent). zynqmp.dtsi leaves it disabled; the ADC capture
+ * relies on it for coherent DMA, so enable it. */
+&cci {
+	status = "okay";
 };
 
 /* Onboard WiFi: Microchip WILC3000 on PS SPI0 SS0 (the wilc1000 driver
