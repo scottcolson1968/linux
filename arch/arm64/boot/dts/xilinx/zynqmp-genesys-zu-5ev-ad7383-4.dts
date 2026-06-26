@@ -464,3 +464,10 @@
 	snps,dis_u2_susphy_quirk;
 	snps,dis_u3_susphy_quirk;
 };
+
+/* Disable the AMS/system-monitor iio device: reading its PL sysmon channels
+ * (e.g. via iio_info) faults -> kernel panic. The node label is xilinx_ams
+ * (ams@ffa50000); plain &ams is the disabled iio-hwmon consumer, not this. */
+&xilinx_ams {
+	status = "disabled";
+};
