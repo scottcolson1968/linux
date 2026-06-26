@@ -46,7 +46,7 @@
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
 
-#define MAX_NUM_CHANNELS		8
+#define MAX_NUM_CHANNELS		16
 /* 2.5V internal reference voltage */
 #define AD7380_INTERNAL_REF_MV		2500
 /* 3.3V internal reference voltage for ADAQ */
@@ -420,6 +420,27 @@ static const struct iio_chan_spec name[] = {	\
 	 IIO_CHAN_SOFT_TIMESTAMP(8),		\
 }
 
+#define DEFINE_AD7380_16_CHANNEL(name, bits, diff, sign) \
+static const struct iio_chan_spec name[] = {	\
+	 AD7380_CHANNEL(0, bits, diff, sign),	\
+	 AD7380_CHANNEL(1, bits, diff, sign),	\
+	 AD7380_CHANNEL(2, bits, diff, sign),	\
+	 AD7380_CHANNEL(3, bits, diff, sign),	\
+	 AD7380_CHANNEL(4, bits, diff, sign),	\
+	 AD7380_CHANNEL(5, bits, diff, sign),	\
+	 AD7380_CHANNEL(6, bits, diff, sign),	\
+	 AD7380_CHANNEL(7, bits, diff, sign),	\
+	 AD7380_CHANNEL(8, bits, diff, sign),	\
+	 AD7380_CHANNEL(9, bits, diff, sign),	\
+	 AD7380_CHANNEL(10, bits, diff, sign),	\
+	 AD7380_CHANNEL(11, bits, diff, sign),	\
+	 AD7380_CHANNEL(12, bits, diff, sign),	\
+	 AD7380_CHANNEL(13, bits, diff, sign),	\
+	 AD7380_CHANNEL(14, bits, diff, sign),	\
+	 AD7380_CHANNEL(15, bits, diff, sign),	\
+	 IIO_CHAN_SOFT_TIMESTAMP(16),		\
+}
+
 #define AD7380_OFFLOAD_CHANNEL(index, bits, diff, sign) \
 _AD7380_OFFLOAD_CHANNEL(index, bits, diff, sign, false)
 
@@ -460,6 +481,26 @@ static const struct iio_chan_spec name[] = {		\
 	AD7380_OFFLOAD_CHANNEL(7, bits, diff, sign),	\
 }
 
+#define DEFINE_AD7380_16_OFFLOAD_CHANNEL(name, bits, diff, sign) \
+static const struct iio_chan_spec name[] = {		\
+	AD7380_OFFLOAD_CHANNEL(0, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(1, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(2, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(3, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(4, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(5, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(6, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(7, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(8, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(9, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(10, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(11, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(12, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(13, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(14, bits, diff, sign),	\
+	AD7380_OFFLOAD_CHANNEL(15, bits, diff, sign),	\
+}
+
 /* fully differential */
 DEFINE_AD7380_2_CHANNEL(ad7380_channels, 16, 1, s);
 DEFINE_AD7380_2_CHANNEL(ad7381_channels, 14, 1, s);
@@ -470,7 +511,7 @@ DEFINE_ADAQ4380_4_CHANNEL(adaq4381_4_channels, 14, 1, s);
 /* pseudo differential */
 DEFINE_AD7380_2_CHANNEL(ad7383_channels, 16, 0, s);
 DEFINE_AD7380_2_CHANNEL(ad7384_channels, 14, 0, s);
-DEFINE_AD7380_4_CHANNEL(ad7383_4_channels, 16, 0, s);
+DEFINE_AD7380_16_CHANNEL(ad7383_4_channels, 16, 0, s);
 DEFINE_AD7380_4_CHANNEL(ad7384_4_channels, 14, 0, s);
 
 /* Single ended */
@@ -492,7 +533,7 @@ DEFINE_ADAQ4380_4_OFFLOAD_CHANNEL(adaq4381_4_offload_channels, 14, 1, s);
 /* pseudo differential */
 DEFINE_AD7380_2_OFFLOAD_CHANNEL(ad7383_offload_channels, 16, 0, s);
 DEFINE_AD7380_2_OFFLOAD_CHANNEL(ad7384_offload_channels, 14, 0, s);
-DEFINE_AD7380_4_OFFLOAD_CHANNEL(ad7383_4_offload_channels, 16, 0, s);
+DEFINE_AD7380_16_OFFLOAD_CHANNEL(ad7383_4_offload_channels, 16, 0, s);
 DEFINE_AD7380_4_OFFLOAD_CHANNEL(ad7384_4_offload_channels, 14, 0, s);
 
 /* Single ended */
@@ -527,6 +568,11 @@ static const unsigned long ad7380_2_channel_scan_masks[] = {
 
 static const unsigned long ad7380_4_channel_scan_masks[] = {
 	GENMASK(3, 0),
+	0
+};
+
+static const unsigned long ad7380_16_channel_scan_masks[] = {
+	GENMASK(15, 0),
 	0
 };
 
@@ -750,7 +796,7 @@ static const struct ad7380_chip_info ad7383_4_chip_info = {
 	.internal_ref_mv = AD7380_INTERNAL_REF_MV,
 	.vcm_supplies = ad7380_4_channel_vcm_supplies,
 	.num_vcm_supplies = ARRAY_SIZE(ad7380_4_channel_vcm_supplies),
-	.available_scan_masks = ad7380_4_channel_scan_masks,
+	.available_scan_masks = ad7380_16_channel_scan_masks,
 	.timing_specs = &ad7380_4_timing,
 	.max_conversion_rate_hz = 4 * MEGA,
 };
@@ -1907,7 +1953,7 @@ static int ad7380_probe_spi_offload(struct iio_dev *indio_dev,
 	 * Starting with a quite low frequency, to allow oversampling x32,
 	 * user is then reponsible to adjust the frequency for the specific case.
 	 */
-	ret = ad7380_set_sample_freq(st, sample_rate / 32);
+	ret = ad7380_set_sample_freq(st, sample_rate);
 	if (ret)
 		return ret;
 
