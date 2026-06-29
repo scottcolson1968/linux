@@ -67,6 +67,18 @@
 		clock-frequency = <100000000>;
 	};
 
+	refclk3: psgtr_usb30_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <100000000>;
+	};
+
+	ref48: ref48M {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <48000000>;
+	};
+
 	/* EVAL-AD738x supplies (fed from FMC rails) */
 	eval_u2: eval-board-u2-regulator {
 		compatible = "regulator-fixed";
@@ -117,8 +129,8 @@
 
 &psgtr {
 	status = "okay";
-	clocks = <&refclk0>, <&refclk1>, <&refclk2>;
-	clock-names = "ref0", "ref1", "ref2";
+	clocks = <&refclk0>, <&refclk1>, <&refclk2>, <&refclk3>;
+	clock-names = "ref0", "ref1", "ref2", "ref3";
 };
 
 /* microSD (boot/rootfs) — itap delays from Digilent OOB project.
@@ -168,9 +180,44 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0x70>;
-		/* mux reset pin (F6, fpga_mux_rst) is not driven by this PL design;
-		 * the board pull keeps it deasserted -- no reset GPIO. */
+		reset-gpios = <&gpio 78 GPIO_ACTIVE_HIGH>;
 		i2c-mux-idle-disconnect;
+
+		i2c@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0>;
+		};
+		i2c@1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <1>;
+		};
+		i2c@2 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <2>;
+			si5342: clock-generator@68 {
+				compatible = "silabs,si5342";
+				reg = <0x68>;
+				#clock-cells = <2>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				clocks = <&ref48>;
+				clock-names = "xtal";
+				silabs,iovdd-33;
+
+				si5342_out0: out@0 {
+					reg = <0>;
+					always-on;
+				};
+
+				si5342_out1: out@1 {
+					reg = <1>;
+					always-on;
+				};
+			};
+		};
 		i2c@3 {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -210,6 +257,16 @@
 				size = <65536>;
 			};
 		};
+		i2c@6 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <6>;
+		};
+		i2c@7 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <7>;
+		};
 	};
 };
 
@@ -248,17 +305,21 @@
 
 &usb0 {
 	status = "okay";
+	xlnx,tz-nonsecure = <1>;
+	xlnx,usb-polarity = <0>;
+	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_0 {
 	status = "okay";
-	dr_mode = "host";
+	dr_mode = "peripheral";
 	snps,usb3_lpm_capable;
 	phy-names = "usb3-phy";
 	phys = <&psgtr 1 PHY_TYPE_USB3 0 0>;
 	snps,dis_u2_susphy_quirk;
 	snps,dis_u3_susphy_quirk;
 	maximum-speed = "super-speed";
+	tx-fifo-resize;
 };
 
 /* PL peripherals (ad738x_fmc_genesys_zu5ev HDL project) */
@@ -339,6 +400,18 @@
 			dma-coherent;
 		};
 
+		adc_en_gpio: gpio@a0070000 {
+			compatible = "xlnx,axi-gpio-2.0", "xlnx,xps-gpio-1.00.a";
+			reg = <0xa0070000 0x1000>;
+			#gpio-cells = <2>;
+			gpio-controller;
+			xlnx,all-inputs = <0x0>;
+			xlnx,all-outputs = <0x1>;
+			xlnx,gpio-width = <0x1>;
+			xlnx,is-dual = <0x0>;
+			clocks = <&zynqmp_clk 71>;
+		};
+
 		axi_spi_engine_0: spi@a0030000 {
 			compatible = "adi,axi-spi-engine-1.00.a";
 			reg = <0xa0030000 0x1000>;
@@ -359,6 +432,9 @@
 
 				spi-cpol;
 				spi-max-frequency = <82000000>;
+
+				/* "en": gates axi_ad738x_dma/sync via axi_gpio_adc_en (PL @0xa0070000) */
+				start-gpios = <&adc_en_gpio 0 GPIO_ACTIVE_HIGH>;
 
 				/*
 				 * ADI tree extension (not mainline). Must match the
@@ -480,4 +556,9 @@
  * (ams@ffa50000); plain &ams is the disabled iio-hwmon consumer, not this. */
 &xilinx_ams {
 	status = "disabled";
+};
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <400000>;
 };

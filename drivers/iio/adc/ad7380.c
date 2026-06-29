@@ -38,6 +38,7 @@
 #include <linux/spi/spi.h>
 #include <linux/units.h>
 #include <linux/util_macros.h>
+#include <linux/gpio/consumer.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/buffer-dmaengine.h>
@@ -347,10 +348,12 @@ static const struct iio_scan_type ad7380_scan_type_16_u_offload[] = {
 		((gain) ? BIT(IIO_CHAN_INFO_SCALE) : 0) |			\
 		((diff) ? 0 : BIT(IIO_CHAN_INFO_OFFSET)),			\
 	.info_mask_shared_by_type = ((gain) ? 0 : BIT(IIO_CHAN_INFO_SCALE)) |   \
-		BIT(IIO_CHAN_INFO_OVERSAMPLING_RATIO) |				\
-		BIT(IIO_CHAN_INFO_SAMP_FREQ),					\
+		BIT(IIO_CHAN_INFO_OVERSAMPLING_RATIO),				\
 	.info_mask_shared_by_type_available =					\
-		BIT(IIO_CHAN_INFO_OVERSAMPLING_RATIO) |				\
+		BIT(IIO_CHAN_INFO_OVERSAMPLING_RATIO),				\
+	.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_SAMP_FREQ) |		\
+		BIT(IIO_CHAN_INFO_ENABLE),		\
+	.info_mask_shared_by_all_available =					\
 		BIT(IIO_CHAN_INFO_SAMP_FREQ),					\
 	.indexed = 1,                                                           \
 	.differential = (diff),                                                 \
@@ -934,6 +937,7 @@ struct ad7380_state {
 	const struct ad7380_chip_info *chip_info;
 	struct spi_device *spi;
 	struct regmap *regmap;
+	struct gpio_desc *gpio_start;
 	bool resolution_boost_enabled;
 	unsigned int ch;
 	bool seq;
@@ -1572,7 +1576,10 @@ static int ad7380_read_raw(struct iio_dev *indio_dev,
 
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SAMP_FREQ:
-		*val = st->offload_trigger_hz;
+		*val = 4096000;
+		return IIO_VAL_INT;
+	case IIO_CHAN_INFO_ENABLE:
+		*val = st->gpio_start ? gpiod_get_value_cansleep(st->gpio_start) : 0;
 		return IIO_VAL_INT;
 	default:
 		return -EINVAL;
@@ -1680,6 +1687,10 @@ static int ad7380_write_raw(struct iio_dev *indio_dev,
 		iio_device_release_direct_mode(indio_dev);
 
 		return ret;
+	case IIO_CHAN_INFO_ENABLE:
+		if (st->gpio_start)
+			gpiod_set_value_cansleep(st->gpio_start, val);
+		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -1995,6 +2006,11 @@ static int ad7380_probe(struct spi_device *spi)
 		return dev_err_probe(dev, ret,
 				     "Failed to enable power supplies\n");
 	fsleep(T_POWERUP_US);
+
+	st->gpio_start = devm_gpiod_get_optional(dev, "start", GPIOD_OUT_HIGH);
+	if (IS_ERR(st->gpio_start))
+		return dev_err_probe(dev, PTR_ERR(st->gpio_start),
+				     "Failed to get start gpio\n");
 
 	if (st->chip_info->internal_ref_only) {
 		/*
