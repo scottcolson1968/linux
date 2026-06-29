@@ -387,7 +387,7 @@
 			clock-names = "clkin1", "s_axi_aclk";
 			clock-output-names = "spi_clk";
 			assigned-clocks = <&spi_clk>;
-			assigned-clock-rates = <163840000>;
+			assigned-clock-rates = <160000000>;
 		};
 
 		rx_dma: dma-controller@a0000000 {
@@ -431,7 +431,7 @@
 				reg = <0>;
 
 				spi-cpol;
-				spi-max-frequency = <82000000>;
+				spi-max-frequency = <80000000>;
 
 				/* "en": gates axi_ad738x_dma/sync via axi_gpio_adc_en (PL @0xa0070000) */
 				start-gpios = <&adc_en_gpio 0 GPIO_ACTIVE_HIGH>;
