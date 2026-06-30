@@ -527,8 +527,13 @@
 	};
 
 	wifi@0 {
-		/* This board revision carries an ATWINC1500 (no Linux driver),
-		 * not the WILC3000 the Digilent OOB dts describes. Disabled.
+		/* Onboard WiFi PHYSICALLY CONFIRMED = ATWINC1500 (not the WILC3000 the
+		 * Digilent OOB dts/blog assume). TESTED 2026-06-30: the wilc1000 driver
+		 * SPI handshake fails (CRC7 on/off, -EINVAL) at BOTH 12MHz and 1MHz, even
+		 * with the Digilent FSBL spi_gpio init applied. The ATWINC1500 boots its
+		 * internal flash into WINC offloaded-stack mode and does NOT present as a
+		 * WILC1000 link-controller, so there is no Linux cfg80211 path. Use a USB
+		 * adapter (e.g. MT7921U) for WiFi/AP. Keep disabled.
 		 */
 		status = "disabled";
 		compatible = "microchip,wilc1000";
