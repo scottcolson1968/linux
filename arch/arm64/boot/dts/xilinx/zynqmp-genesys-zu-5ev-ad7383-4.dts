@@ -10,8 +10,9 @@
  *
  * Board peripheral configuration derived from the Digilent Genesys ZU OOB
  * PetaLinux project (github.com/Digilent/genesys-zu-os, 5ev/oob/master).
- * PL node addresses/IRQs follow the ADI ZynqMP carrier conventions:
- * 0x44axxxxx (Zynq-7000) -> 0x84axxxxx, ps-12 -> GIC 108, ps-13 -> GIC 109.
+ * PL peripherals match the GUI build (system_bd_gui.tcl): base 0xA00xxxxx,
+ * coherent HPC0 (dma-coherent on rx_dma + CCI-400 enabled).
+ * IRQs: eth ps-10/11 -> GIC 106/107, ps-12 -> GIC 108, ps-13 -> GIC 109.
  *
  * Copyright (C) 2026 Analog Devices Inc.
  */
@@ -66,6 +67,18 @@
 		clock-frequency = <100000000>;
 	};
 
+	refclk3: psgtr_usb30_clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <100000000>;
+	};
+
+	ref48: ref48M {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <48000000>;
+	};
+
 	/* EVAL-AD738x supplies (fed from FMC rails) */
 	eval_u2: eval-board-u2-regulator {
 		compatible = "regulator-fixed";
@@ -116,8 +129,8 @@
 
 &psgtr {
 	status = "okay";
-	clocks = <&refclk0>, <&refclk1>, <&refclk2>;
-	clock-names = "ref0", "ref1", "ref2";
+	clocks = <&refclk0>, <&refclk1>, <&refclk2>, <&refclk3>;
+	clock-names = "ref0", "ref1", "ref2", "ref3";
 };
 
 /* microSD (boot/rootfs) — itap delays from Digilent OOB project.
@@ -167,9 +180,44 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0x70>;
-		/* mux reset pin (F6, fpga_mux_rst) is not driven by this PL design;
-		 * the board pull keeps it deasserted -- no reset GPIO. */
+		reset-gpios = <&gpio 78 GPIO_ACTIVE_HIGH>;
 		i2c-mux-idle-disconnect;
+
+		i2c@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0>;
+		};
+		i2c@1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <1>;
+		};
+		i2c@2 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <2>;
+			si5342: clock-generator@68 {
+				compatible = "silabs,si5342";
+				reg = <0x68>;
+				#clock-cells = <2>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				clocks = <&ref48>;
+				clock-names = "xtal";
+				silabs,iovdd-33;
+
+				si5342_out0: out@0 {
+					reg = <0>;
+					always-on;
+				};
+
+				si5342_out1: out@1 {
+					reg = <1>;
+					always-on;
+				};
+			};
+		};
 		i2c@3 {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -209,6 +257,16 @@
 				size = <65536>;
 			};
 		};
+		i2c@6 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <6>;
+		};
+		i2c@7 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <7>;
+		};
 	};
 };
 
@@ -247,17 +305,21 @@
 
 &usb0 {
 	status = "okay";
+	xlnx,tz-nonsecure = <1>;
+	xlnx,usb-polarity = <0>;
+	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_0 {
 	status = "okay";
-	dr_mode = "host";
+	dr_mode = "peripheral";
 	snps,usb3_lpm_capable;
 	phy-names = "usb3-phy";
 	phys = <&psgtr 1 PHY_TYPE_USB3 0 0>;
 	snps,dis_u2_susphy_quirk;
 	snps,dis_u3_susphy_quirk;
 	maximum-speed = "super-speed";
+	tx-fifo-resize;
 };
 
 /* PL peripherals (ad738x_fmc_genesys_zu5ev HDL project) */
@@ -272,18 +334,18 @@
 		/* 10G Ethernet over SFP+: xxv_ethernet MAC + AXI DMA, xlnx
 		 * axienet driver. PCS/PMA BASE-R to the 10GBASE-T module.
 		 */
-		eth_mcdma: dma@84c10000 {
+		eth_mcdma: dma@a0020000 {
 			compatible = "xlnx,eth-dma";
-			reg = <0x84c10000 0x10000>;
+			reg = <0xa0020000 0x10000>;
 			/* 32-bit: axi_mcdma c_addr_width=32, low DDR via coherent HPC0
 			 * (was 40 for axi_dma). */
 			xlnx,addrwidth = <0x20>;
 			xlnx,include-dre;
 		};
 
-		xxv_eth: ethernet@84c00000 {
+		xxv_eth: ethernet@a0060000 {
 			compatible = "xlnx,xxv-ethernet-1.0";
-			reg = <0x84c00000 0x10000>;
+			reg = <0xa0060000 0x10000>;
 			device_type = "network";
 			axistream-connected = <&eth_mcdma>;
 			/* MCDMA: 1 queue, chan id 1. The driver builds IRQ names
@@ -299,7 +361,10 @@
 			max-speed = <10000>;
 			phy-mode = "10gbase-r";
 			xlnx,rxmem = <0x6000>;
-			xlnx,txcsum = <0>;
+			/* TX TCP checksum offload (partial): advertises NETIF_F_HW_CSUM
+			 * so the stack offloads L4 csum to the PL tx_csum_open engine.
+			 * RX offload stays off (autonomous engine is TX-only). */
+			xlnx,txcsum = <1>;
 			xlnx,rxcsum = <0>;
 
 			fixed-link {
@@ -308,18 +373,18 @@
 			};
 		};
 
-		adc_trigger: pwm@84b00000 {
+		adc_trigger: pwm@a0050000 {
 			compatible = "adi,axi-pwmgen-2.00.a";
-			reg = <0x84b00000 0x1000>;
+			reg = <0xa0050000 0x1000>;
 			label = "adc_conversion_trigger";
 			#pwm-cells = <3>;
 			clocks = <&zynqmp_clk 71>, <&spi_clk>;
 			clock-names = "axi", "ext";
 		};
 
-		spi_clk: clock-controller@84a70000 {
+		spi_clk: clock-controller@a0040000 {
 			compatible = "adi,axi-clkgen-2.00.a";
-			reg = <0x84a70000 0x1000>;
+			reg = <0xa0040000 0x1000>;
 			#clock-cells = <0>;
 			clocks = <&zynqmp_clk 71>, <&zynqmp_clk 71>;
 			clock-names = "clkin1", "s_axi_aclk";
@@ -328,17 +393,43 @@
 			assigned-clock-rates = <160000000>;
 		};
 
-		rx_dma: dma-controller@84a30000 {
+		rx_dma: dma-controller@a0000000 {
 			compatible = "adi,axi-dmac-1.00.a";
-			reg = <0x84a30000 0x1000>;
+			reg = <0xa0000000 0x1000>;
 			#dma-cells = <1>;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>; /* ps-13 */
 			clocks = <&zynqmp_clk 71>;
+			/* coherent HPC0 path: DMA writes are cache-coherent (needs CCI). */
+			dma-coherent;
 		};
 
-		axi_spi_engine_0: spi@84a00000 {
+		rgb_led_gpio: gpio@a0080000 {
+			compatible = "xlnx,axi-gpio-2.0", "xlnx,xps-gpio-1.00.a";
+			reg = <0xa0080000 0x1000>;
+			#gpio-cells = <2>;
+			gpio-controller;
+			xlnx,all-inputs = <0x0>;
+			xlnx,all-outputs = <0x1>;
+			xlnx,gpio-width = <0x3>;
+			xlnx,is-dual = <0x0>;
+			clocks = <&zynqmp_clk 71>;
+		};
+
+		adc_en_gpio: gpio@a0070000 {
+			compatible = "xlnx,axi-gpio-2.0", "xlnx,xps-gpio-1.00.a";
+			reg = <0xa0070000 0x1000>;
+			#gpio-cells = <2>;
+			gpio-controller;
+			xlnx,all-inputs = <0x0>;
+			xlnx,all-outputs = <0x1>;
+			xlnx,gpio-width = <0x1>;
+			xlnx,is-dual = <0x0>;
+			clocks = <&zynqmp_clk 71>;
+		};
+
+		axi_spi_engine_0: spi@a0030000 {
 			compatible = "adi,axi-spi-engine-1.00.a";
-			reg = <0x84a00000 0x1000>;
+			reg = <0xa0030000 0x1000>;
 			interrupts = <0 108 IRQ_TYPE_LEVEL_HIGH>; /* ps-12 */
 			clocks = <&zynqmp_clk 71>, <&spi_clk>;
 			clock-names = "s_axi_aclk", "spi_clk";
@@ -356,6 +447,9 @@
 
 				spi-cpol;
 				spi-max-frequency = <80000000>;
+
+				/* "en": gates axi_ad738x_dma/sync via axi_gpio_adc_en (PL @0xa0070000) */
+				start-gpios = <&adc_en_gpio 0 GPIO_ACTIVE_HIGH>;
 
 				/*
 				 * ADI tree extension (not mainline). Must match the
@@ -381,6 +475,13 @@
  */
 &pss_ref_clk {
 	clock-frequency = <30000000>;
+};
+
+/* CCI-400: cache-coherent interconnect for the PL coherent-HPC0 DMA path
+ * (rx_dma dma-coherent). zynqmp.dtsi leaves it disabled; the ADC capture
+ * relies on it for coherent DMA, so enable it. */
+&cci {
+	status = "okay";
 };
 
 /* Onboard WiFi: Microchip WILC3000 on PS SPI0 SS0 (the wilc1000 driver
@@ -429,8 +530,13 @@
 	};
 
 	wifi@0 {
-		/* This board revision carries an ATWINC1500 (no Linux driver),
-		 * not the WILC3000 the Digilent OOB dts describes. Disabled.
+		/* Onboard WiFi PHYSICALLY CONFIRMED = ATWINC1500 (not the WILC3000 the
+		 * Digilent OOB dts/blog assume). TESTED 2026-06-30: the wilc1000 driver
+		 * SPI handshake fails (CRC7 on/off, -EINVAL) at BOTH 12MHz and 1MHz, even
+		 * with the Digilent FSBL spi_gpio init applied. The ATWINC1500 boots its
+		 * internal flash into WINC offloaded-stack mode and does NOT present as a
+		 * WILC1000 link-controller, so there is no Linux cfg80211 path. Use a USB
+		 * adapter (e.g. MT7921U) for WiFi/AP. Keep disabled.
 		 */
 		status = "disabled";
 		compatible = "microchip,wilc1000";
@@ -470,4 +576,41 @@
  * (ams@ffa50000); plain &ams is the disabled iio-hwmon consumer, not this. */
 &xilinx_ams {
 	status = "disabled";
+};
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <400000>;
+};
+
+/*
+ * RGB status LED (LD5) on PS EMIO GPIO -- see system_top.v / system_constr.xdc.
+ * EMIO bit 44/45/46 -> Linux gpio line 78+N = 122/123/124 -> ld5_r/g/b.
+ * Driven by daq-status-led.service: red = booting, blue = iiod starting,
+ * green = safe for a PC libiio client (USB or network) to connect.
+ * NOTE: if the colors come up inverted on the bench, LD5 is active-low --
+ * change GPIO_ACTIVE_HIGH to GPIO_ACTIVE_LOW below (DTB-only, no bitstream).
+ */
+/ {
+	leds {
+		compatible = "gpio-leds";
+
+		led-red {
+			label = "daq:red";
+			gpios = <&rgb_led_gpio 0 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+
+		led-green {
+			label = "daq:green";
+			gpios = <&rgb_led_gpio 1 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+
+		led-blue {
+			label = "daq:blue";
+			gpios = <&rgb_led_gpio 2 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
 };
