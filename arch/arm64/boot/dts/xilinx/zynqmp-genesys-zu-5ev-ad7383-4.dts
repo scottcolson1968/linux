@@ -400,6 +400,18 @@
 			dma-coherent;
 		};
 
+		rgb_led_gpio: gpio@a0080000 {
+			compatible = "xlnx,axi-gpio-2.0", "xlnx,xps-gpio-1.00.a";
+			reg = <0xa0080000 0x1000>;
+			#gpio-cells = <2>;
+			gpio-controller;
+			xlnx,all-inputs = <0x0>;
+			xlnx,all-outputs = <0x1>;
+			xlnx,gpio-width = <0x3>;
+			xlnx,is-dual = <0x0>;
+			clocks = <&zynqmp_clk 71>;
+		};
+
 		adc_en_gpio: gpio@a0070000 {
 			compatible = "xlnx,axi-gpio-2.0", "xlnx,xps-gpio-1.00.a";
 			reg = <0xa0070000 0x1000>;
@@ -561,4 +573,36 @@
 &i2c1 {
 	status = "okay";
 	clock-frequency = <400000>;
+};
+
+/*
+ * RGB status LED (LD5) on PS EMIO GPIO -- see system_top.v / system_constr.xdc.
+ * EMIO bit 44/45/46 -> Linux gpio line 78+N = 122/123/124 -> ld5_r/g/b.
+ * Driven by daq-status-led.service: red = booting, blue = iiod starting,
+ * green = safe for a PC libiio client (USB or network) to connect.
+ * NOTE: if the colors come up inverted on the bench, LD5 is active-low --
+ * change GPIO_ACTIVE_HIGH to GPIO_ACTIVE_LOW below (DTB-only, no bitstream).
+ */
+/ {
+	leds {
+		compatible = "gpio-leds";
+
+		led-red {
+			label = "daq:red";
+			gpios = <&rgb_led_gpio 0 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+		};
+
+		led-green {
+			label = "daq:green";
+			gpios = <&rgb_led_gpio 1 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+
+		led-blue {
+			label = "daq:blue";
+			gpios = <&rgb_led_gpio 2 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
 };
