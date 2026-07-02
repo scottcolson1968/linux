@@ -361,7 +361,10 @@
 			max-speed = <10000>;
 			phy-mode = "10gbase-r";
 			xlnx,rxmem = <0x6000>;
-			xlnx,txcsum = <0>;
+			/* TX TCP checksum offload (partial): advertises NETIF_F_HW_CSUM
+			 * so the stack offloads L4 csum to the PL tx_csum_open engine.
+			 * RX offload stays off (autonomous engine is TX-only). */
+			xlnx,txcsum = <1>;
 			xlnx,rxcsum = <0>;
 
 			fixed-link {

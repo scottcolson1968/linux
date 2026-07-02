@@ -1958,6 +1958,21 @@ static int axienet_queue_xmit(struct sk_buff *skb,
 			cur_p->app0 |= 1;
 			cur_p->app1 = (csum_start_off << 16) | csum_index_off;
 		}
+	} else if (skb->ip_summed == CHECKSUM_PARTIAL && !lp->eth_hasnobuf &&
+		   lp->axienet_config->mactype == XAXIENET_10G_25G &&
+		   !(lp->eoe_connected)) {
+		if (lp->features & XAE_FEATURE_PARTIAL_TX_CSUM) {
+			csum_start_off = skb_transport_offset(skb);
+			csum_index_off = csum_start_off + skb->csum_offset;
+			/* XXV Tx Partial Checksum Offload Enabled:
+			 * app1 bit10 flags the csum request, app3 carries the
+			 * start/insert byte offsets. PL tx_csum engine sums
+			 * [start..EOF] (seed pre-placed by stack) and writes
+			 * ~fold at insert. Matches Xilinx CSO example contract.
+			 */
+			cur_p->app1 |= 1 << 10;
+			cur_p->app3 = csum_start_off | (csum_index_off << 16);
+		}
 	} else if (skb->ip_summed == CHECKSUM_UNNECESSARY &&
 		   !lp->eth_hasnobuf &&
 		   (lp->axienet_config->mactype == XAXIENET_1_2p5G) &&
