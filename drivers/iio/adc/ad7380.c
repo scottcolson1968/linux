@@ -294,7 +294,7 @@ static const struct iio_scan_type ad7380_scan_type_16_s_offload[] = {
 	[AD7380_SCAN_TYPE_NORMAL] = {
 		.sign = 's',
 		.realbits = 16,
-		.storagebits = 16,
+		.storagebits = 32,
 		.endianness = IIO_CPU,
 	},
 	[AD7380_SCAN_TYPE_RESOLUTION_BOOST] = {
