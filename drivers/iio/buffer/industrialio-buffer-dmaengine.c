@@ -45,6 +45,33 @@ static struct dmaengine_buffer *iio_buffer_to_dmaengine_buffer(
 	return container_of(buffer, struct dmaengine_buffer, queue.buffer);
 }
 
+/*
+ * Per-acquisition capture block counter (restores the Wildcat "BufferID" from
+ * v0.53, dropped in the v0.64 6.12-kernel rebase). Reset to 0 in
+ * iio_dmaengine_buffer_enable() when an input stream starts, and stamped into
+ * each completed capture block by iio_dmaengine_buffer_block_done(). The host
+ * uses the monotonic sequence to detect dropped/reordered buffers: a gap means
+ * the kernel delivered fewer buffers than it produced (client too slow / overflow).
+ *
+ * Opt-in on the IIO buffer size measured in SCANS (v0.53 convention): the
+ * counter is emitted only when (scans % 1024) != 0, i.e. the host sizes the
+ * buffer "1 over a multiple of 1024" (1025, 2049, 4097, ...). A whole multiple
+ * of 1024 scans (1024, 2048, 4096) is delivered as pure ADC data with no
+ * counter and no DMA change. Gating on scans (unit = 1024 * bytes_per_datum),
+ * not raw bytes, keeps it identical across storagebits (16- vs 32-bit builds).
+ *
+ * When opted in, iio_dmaengine_buffer_submit_block() DMAs only the whole-1024-
+ * scan data region and reserves the trailing (scans % 1024) scans; here we
+ * zero that reserved region and write the u32 counter into its first word, so
+ * NO ADC scan is overwritten.
+ *
+ * Contract with userspace: when (scans % 1024) != 0, the final (scans % 1024)
+ * scans of the buffer are NOT ADC data — zero-filled with the u32 counter in
+ * word 0. The host discards that trailing region and reads word 0. Only one RX
+ * capture buffer exists on this design, so a single global counter suffices.
+ */
+static u32 iio_dmaengine_block_count;
+
 static void iio_dmaengine_buffer_block_done(void *data,
 		const struct dmaengine_result *result)
 {
@@ -59,7 +86,47 @@ static void iio_dmaengine_buffer_block_done(void *data,
 #else
 	block->bytes_used -= result->residue;
 #endif
+
+	/*
+	 * BufferID counter (v0.53): only when the buffer's scan count is not a
+	 * multiple of 1024 (host opts in via scans % 1024 != 0). submit_block
+	 * reserved the trailing (scans % 1024) scans from the DMA, so we zero
+	 * that region and write the u32 counter into its first word without
+	 * touching any ADC data.
+	 */
+#ifdef CONFIG_IIO_DMA_BUF_MMAP_LEGACY
+	if (block->queue->buffer.direction == IIO_BUFFER_DIRECTION_IN &&
+	    block->vaddr) {
+		size_t scan = block->queue->buffer.bytes_per_datum;
+		size_t sz   = block->block.size;
+
+		if (scan) {
+			size_t unit = 1024 * scan;		/* 1024 scans */
+			size_t data = (sz / unit) * unit;	/* whole 1024-scan region */
+			size_t rem  = sz - data;		/* (scans % 1024) scans */
+
+			if (data && rem >= sizeof(u32)) {
+				u32 *meta = (u32 *)((u8 *)block->vaddr + data);
+
+				memset(meta, 0, rem);
+				meta[0] = iio_dmaengine_block_count++;
+				block->block.bytes_used = sz;
+			}
+		}
+	}
+#endif
+
 	iio_dma_buffer_block_done(block);
+}
+
+static int iio_dmaengine_buffer_enable(struct iio_buffer *buffer,
+	struct iio_dev *indio_dev)
+{
+	/* Restart the capture block counter at the top of each acquisition. */
+	if (buffer->direction == IIO_BUFFER_DIRECTION_IN)
+		iio_dmaengine_block_count = 0;
+
+	return iio_dma_buffer_enable(buffer, indio_dev);
 }
 
 int iio_dmaengine_buffer_submit_block(struct iio_dma_buffer_queue *queue,
@@ -85,6 +152,24 @@ int iio_dmaengine_buffer_submit_block(struct iio_dma_buffer_queue *queue,
 	if (queue->buffer.direction == IIO_BUFFER_DIRECTION_IN) {
 		dma_dir = DMA_DEV_TO_MEM;
 		block->block.bytes_used = block->block.size;
+		/*
+		 * BufferID counter opt-in (v0.53): if the buffer's scan count is
+		 * not a multiple of 1024, DMA only the whole-1024-scan data region
+		 * and leave the trailing (scans % 1024) scans for
+		 * iio_dmaengine_buffer_block_done() to fill with the counter. A
+		 * whole multiple of 1024 scans is transferred intact, no counter.
+		 */
+		{
+			size_t scan = queue->buffer.bytes_per_datum;
+
+			if (scan) {
+				size_t unit = 1024 * scan;
+				size_t data = (block->block.size / unit) * unit;
+
+				if (data && data < block->block.size)
+					block->block.bytes_used = data;
+			}
+		}
 	} else {
 		dma_dir = DMA_MEM_TO_DEV;
 	}
@@ -204,7 +289,7 @@ static const struct iio_buffer_access_funcs iio_dmaengine_buffer_ops = {
 	.set_bytes_per_datum = iio_dma_buffer_set_bytes_per_datum,
 	.set_length = iio_dma_buffer_set_length,
 	.request_update = iio_dma_buffer_request_update,
-	.enable = iio_dma_buffer_enable,
+	.enable = iio_dmaengine_buffer_enable,
 	.disable = iio_dma_buffer_disable,
 	.data_available = iio_dma_buffer_usage,
 	.space_available = iio_dma_buffer_usage,
