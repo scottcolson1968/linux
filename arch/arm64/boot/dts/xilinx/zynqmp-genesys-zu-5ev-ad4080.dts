@@ -404,9 +404,19 @@
 	snps,dis_u3_susphy_quirk;
 };
 
-/* Reading PL sysmon channels faults -> panic; keep the AMS iio device disabled. */
+/* AMS (ZynqMP System Monitor).
+ * PS block = SoC die temperature + PS supply rails -> enabled.
+ * PL block = left at its zynqmp.dtsi default of "disabled" ON PURPOSE: this
+ * design instantiates no PL sysmon, and reading those channels faults ->
+ * panic. That fault is why the whole AMS node used to be disabled; scoping
+ * the disable to ams_pl recovers SoC temperature without the panic.
+ */
 &xilinx_ams {
-	status = "disabled";
+	status = "okay";
+};
+
+&ams_ps {
+	status = "okay";
 };
 
 &i2c1 {
