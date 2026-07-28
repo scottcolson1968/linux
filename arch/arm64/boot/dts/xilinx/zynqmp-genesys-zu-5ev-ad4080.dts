@@ -375,6 +375,15 @@
 
 		adi,num-lanes = <2>;
 
+		/* The eval board drives CNV differentially, from AD9508 OUT2 on
+		 * CNV_P/CNV_N, but the AD4080 powers up with CNV in CMOS mode.
+		 * This property is what makes the driver set LVDS_CNV_EN, program
+		 * LVDS_CNV_CLK_CNT and -- critically -- run the lane alignment:
+		 * all three sit behind the same guard, so without it the part
+		 * ignores the differential CNV AND the lanes are never trained,
+		 * with nothing in the logs pointing at the cause. */
+		adi,lvds-cnv-enable;
+
 		vdd33-supply = <&vdd33>;
 		vrefin-supply = <&vrefin>;
 	};
