@@ -192,10 +192,16 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <4>;
-			eeprom@51 { /* FMC VITA 57.1 FRU */
+			/* FMC VITA 57.1 FRU EEPROM, on the daughtercard (U18 on the
+			 * EVAL-AD4080-FMCZ). Exposed as IIO attributes by the
+			 * wildcat_fru node below; also carries the DC Load record
+			 * the PMCU reads to choose VADJ, which fmc-vadj-fix patches.
+			 * pagesize 8 (was 1): single-byte writes during the ~5 ms
+			 * write cycle are the case that gets silently dropped. */
+			fmc_eeprom: eeprom@51 {
 				compatible = "atmel,24c02";
 				reg = <0x51>;
-				pagesize = <1>;
+				pagesize = <8>;
 			};
 		};
 		i2c@5 {
@@ -321,6 +327,16 @@
 			reg = <0x80050000 0x10000>;
 			clocks = <&zynqmp_clk 71>;
 			clock-names = "s_axi_aclk";
+		};
+
+		/* FMC FRU identity (manufacturer / product_name / serial_number /
+		 * board_revision) as read-write IIO device attributes. Reaches the
+		 * EEPROM through its at24 nvmem device, so there is no second i2c
+		 * client. Probes only when a daughtercard is fitted. */
+		wildcat_fru {
+			compatible = "sd,fru";
+			nvmem = <&fmc_eeprom>;
+			nvmem-names = "fru";
 		};
 
 		rgb_led_gpio: gpio@80080000 {
