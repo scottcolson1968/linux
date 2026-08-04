@@ -314,24 +314,87 @@ static int ad4080_write_raw(struct iio_dev *indio_dev,
 	}
 }
 
+#define AD4080_IODELAY_MAX_TAPS		512
+#define AD4080_IODELAY_MAP_COLS		64
+
+/*
+ * Sweep the receiver IDELAY taps and settle in the middle of the widest window
+ * that aligns.
+ *
+ * ad_serdes_in.v builds IDELAYE3/IDELAYE2 with DELAY_VALUE(0) and nothing loads
+ * a tap at runtime, so alignment depends on the carrier's FMC routing delay
+ * happening to land inside the data eye. That is true on ADI's ZedBoard and not
+ * on every carrier - at 400 MHz DDR the eye is only ~1.25 ns wide. Sweeping and
+ * centring is both portable and gives real setup/hold margin.
+ *
+ * The pass/fail map is logged so a failure is diagnosable: an all-fail map means
+ * the lanes are not carrying the pattern at all (clocking or wiring), whereas a
+ * narrow or edge-hugging window means marginal timing.
+ */
 static int ad4080_lvds_sync_write(struct ad4080_state *st, unsigned int ch)
 {
 	struct device *dev = regmap_get_device(st->regmap[ch]);
+	unsigned int tap, lane, best_start = 0, best_len = 0, run = 0;
+	unsigned int group = AD4080_IODELAY_MAX_TAPS / AD4080_IODELAY_MAP_COLS;
+	char map[AD4080_IODELAY_MAP_COLS + 1];
 	int ret;
+
+	/* map is downsampled: one column per `group` taps, '#' if any aligned */
+	memset(map, '-', sizeof(map) - 1);
+	map[AD4080_IODELAY_MAP_COLS] = '\0';
 
 	ret = regmap_set_bits(st->regmap[ch], AD4080_REG_ADC_DATA_INTF_CONFIG_A,
 			      AD4080_ADC_DATA_INTF_CONFIG_A_INTF_CHK_EN);
 	if (ret)
 		return ret;
 
+	for (tap = 0; tap < AD4080_IODELAY_MAX_TAPS; tap++) {
+		for (lane = 0; lane < st->num_lanes; lane++) {
+			ret = iio_backend_iodelay_set(st->back[ch], lane, tap);
+			if (ret)
+				goto out_disable_chk;
+		}
+
+		if (iio_backend_interface_data_align(st->back[ch], 10000)) {
+			run = 0;
+			continue;
+		}
+
+		map[tap / group] = '#';
+		run++;
+		if (run > best_len) {
+			best_len = run;
+			best_start = tap - run + 1;
+		}
+	}
+	if (!best_len) {
+		dev_err(dev, "IDELAY sweep found no aligning tap: [%s]\n", map);
+		ret = -ETIMEDOUT;
+		goto out_disable_chk;
+	}
+
+	tap = best_start + best_len / 2;
+	dev_info(dev, "IDELAY sweep [%s] window %u..%u, using tap %u\n",
+		 map, best_start, best_start + best_len - 1, tap);
+
+	for (lane = 0; lane < st->num_lanes; lane++) {
+		ret = iio_backend_iodelay_set(st->back[ch], lane, tap);
+		if (ret)
+			goto out_disable_chk;
+	}
+
 	ret = iio_backend_interface_data_align(st->back[ch], 10000);
-	if (ret)
-		return dev_err_probe(dev, ret,
-				     "Data alignment process failed\n");
+	if (ret) {
+		dev_err(dev, "Alignment failed at chosen tap %u\n", tap);
+		goto out_disable_chk;
+	}
 
 	dev_dbg(dev, "Success: Pattern correct and Locked!\n");
-	return regmap_clear_bits(st->regmap[ch], AD4080_REG_ADC_DATA_INTF_CONFIG_A,
-				 AD4080_ADC_DATA_INTF_CONFIG_A_INTF_CHK_EN);
+
+out_disable_chk:
+	regmap_clear_bits(st->regmap[ch], AD4080_REG_ADC_DATA_INTF_CONFIG_A,
+			  AD4080_ADC_DATA_INTF_CONFIG_A_INTF_CHK_EN);
+	return ret;
 }
 
 static int ad4080_get_filter_type(struct iio_dev *dev,

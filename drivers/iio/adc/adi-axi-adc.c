@@ -78,7 +78,8 @@
 
 /* IO Delays */
 #define ADI_AXI_ADC_REG_DELAY(l)		(0x0800 + (l) * 0x4)
-#define   AXI_ADC_DELAY_CTRL_MASK		GENMASK(4, 0)
+/* IDELAYE3 (UltraScale+) has a 9-bit tap counter; IDELAYE2 (7-series) 5-bit. */
+#define   AXI_ADC_DELAY_CTRL_MASK		GENMASK(8, 0)
 
 #define ADI_AXI_ADC_MAX_IO_NUM_LANES		15
 
@@ -417,6 +418,13 @@ static const struct iio_backend_ops adi_ad408x_ops = {
 	.filter_type_set = axi_adc_ad408x_filter_type_set,
 	.interface_data_align = axi_adc_ad408x_interface_data_align,
 	.num_lanes_set = axi_adc_num_lanes_set,
+	/*
+	 * Needed so the frontend can sweep IDELAY taps: ad_serdes_in.v builds
+	 * IDELAYE3 with DELAY_VALUE(0), so on carriers whose FMC routing puts
+	 * the sample point outside the eye (Genesys ZU vs ZedBoard) alignment
+	 * can only succeed with a non-zero tap.
+	 */
+	.iodelay_set = axi_adc_iodelays_set,
 	.debugfs_reg_access = iio_backend_debugfs_ptr(axi_adc_reg_access),
 	.debugfs_print_chan_status = iio_backend_debugfs_ptr(axi_adc_debugfs_print_chan_status),
 };

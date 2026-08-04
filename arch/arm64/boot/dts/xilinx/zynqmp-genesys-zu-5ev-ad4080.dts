@@ -26,6 +26,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/net/ti-dp83867.h>
 #include <dt-bindings/phy/phy.h>
+#include <dt-bindings/iio/frequency/ad9508.h>
 
 / {
 	model = "Digilent Genesys ZU-5EV + EVAL-AD4080 FMC (Wildcat2)";
@@ -41,7 +42,14 @@
 	};
 
 	chosen {
-		bootargs = "earlycon console=ttyPS0,115200 root=/dev/mmcblk1p2 rw rootwait cma=512M";
+		/* clk_ignore_unused is REQUIRED, not cosmetic: sys_iodelay_clk comes
+		 * from pl2_ref (500 MHz) and feeds IDELAYCTRL REFCLK in axi_ad408x.
+		 * Nothing in this DT claims pl2_ref, so without this flag the CCF
+		 * gates it off at late init ("clk: Disabling unused clocks"),
+		 * IDELAYCTRL never asserts RDY, IDELAYE3 never calibrates, and the
+		 * LVDS lane alignment times out giving no clue as to why.
+		 * ADI Kuiper sets the same flag on ZedBoard. */
+		bootargs = "earlycon console=ttyPS0,115200 root=/dev/mmcblk1p2 rw rootwait cma=512M clk_ignore_unused";
 		stdout-path = "serial0:115200n8";
 	};
 
@@ -383,13 +391,13 @@
 		spi-cpol;
 		spi-cpha;
 
-		/* AD9508 OUT2 = CNV_P/N, 32.768 MHz (327.68 / 10) */
+		/* AD9508 OUT2 = CNV_P/N, 40 MHz (400 / 10) */
 		clocks = <&ad9508 2>;
 		clock-names = "cnv";
 
 		io-backends = <&axi_ad408x>;
 
-		adi,num-lanes = <2>;
+		adi,num-lanes = <1>;
 
 		/* The eval board drives CNV differentially, from AD9508 OUT2 on
 		 * CNV_P/CNV_N, but the AD4080 powers up with CNV in CMOS mode.
@@ -421,15 +429,26 @@
  * IN_SEL is tied high on the eval board) -> OUT0 FPGACLK to FMC CLK1_M2C,
  * OUT2 CNV (40 MHz max), OUT3 CLK (400 MHz max). OUT1 is unused.
  *
- * WildCat2 operating point:
- *   ADF4350 = 327.68 MHz EXACTLY. With a 25 MHz PFD and adi,channel-spacing of
- *   40 kHz the driver computes MOD = 25e6/40e3 = 625, giving INT 104, FRAC 536
- *   and an RF divider of 8: 25 MHz x (104 + 536/625) / 8 = 327.68 MHz with no
- *   frequency error, which the power-of-two FFT frame requires.
- *   AD9508 OUT3 /1  = 327.68 MHz  -> LVDS interface clock (20-bit single-lane
- *                                    DDR needs 10 x fS)
- *   AD9508 OUT2 /10 = 32.768 MHz  -> CNV
- *   AD4080 sinc5+comp at total decimation 8 -> 4.096 MSPS output.
+ * Operating point CHANGED 2026-08-03 to match ADI's ZedBoard reference exactly
+ * (zynq-zed-ad4080.dts), which is PROVEN to capture on this card. The point is
+ * to remove our custom clock tree as a variable during bring-up:
+ *   ADF4350 = 400 MHz (channel-spacing 100 kHz, as ADI)
+ *   AD9508 OUT3 /1  = 400 MHz -> LVDS interface clock, PHASE_INVERTING
+ *   AD9508 OUT2 /10 =  40 MHz -> CNV
+ *   AD9508 OUT0 /10 =  40 MHz -> FPGACLK
+ *   adi,num-lanes = 1: 20 bit / 1 lane / 2 (DDR) = 10 clocks per sample,
+ *                      so 400 MHz / 10 = 40 MSPS, the AD4080's full rate.
+ *
+ * NB the PREVIOUS config was internally inconsistent and would not have aligned:
+ * the tree was built for SINGLE-lane capture (CLK = 10 x fS, 327.68/32.768) but
+ * adi,num-lanes said 2, which needs only 5 x fS.
+ *
+ * TO RESTORE THE WILDCAT2 TARGET once capture is proven: ADF4350 327.68 MHz
+ * EXACTLY (25 MHz PFD, channel-spacing 40 kHz -> MOD = 625, INT 104, FRAC 536,
+ * RF divider 8 -> zero frequency error, which the power-of-two FFT frame needs),
+ * OUT3 /1 = 327.68 MHz, OUT2 /10 = 32.768 MHz, num-lanes 1, then sinc5+comp at
+ * total decimation 8 -> 4.096 MSPS. Backup of that version:
+ * zynqmp-genesys-zu-5ev-ad4080.dts.pre_40mhz
  *
  * CLK and CNV leave the SAME device from matched integer dividers, so their
  * relative phase is deterministic and the +/-535 ps tCCA alignment is structural
@@ -459,7 +478,9 @@
 		/* OUT0 -> FPGACLK_P/N to FMC CLK1_M2C; not used by this design. */
 		channel@0 {
 			reg = <0>;
-			adi,channel-divider = <1>;
+			adi,channel-divider = <10>;
+			adi,driver-mode = <(DRIVER_PHASE_NORMAL | DRIVER_MODE_LVDS_1_25)>;
+			adi,divider-phase = <0>;
 			adi,extended-name = "FPGACLK";
 		};
 
@@ -467,13 +488,32 @@
 		channel@2 {
 			reg = <2>;
 			adi,channel-divider = <10>;
+			adi,driver-mode = <(DRIVER_PHASE_NORMAL | DRIVER_MODE_LVDS_1_25)>;
+			adi,divider-phase = <0>;
 			adi,extended-name = "CNV";
 		};
 
 		/* OUT3 -> CLK_P/N. 327.68 MHz (400 MHz max on this net). */
 		channel@3 {
 			reg = <3>;
+			/* /2 = 200 MHz DCO with adi,num-lanes = <1>.
+			 * ILA measurement 2026-08-04: with DCO at 400 MHz the FPGA captured
+			 * every data bit TWICE - one conversion filled 40 DDR slots instead
+			 * of 20 (full-rate period 40 bits; decimate-by-2 gives a perfect
+			 * 20-bit period, match 1.0000). That means the ADC launches data at
+			 * 400 Mbps, i.e. 20 bits at a 20 MSPS conversion rate, so a 400 MHz
+			 * DCO is exactly 2x too fast for the data and NO shift_cnt or IDELAY
+			 * tap can ever recover the pattern. 200 MHz DDR = 400 Mbps matches
+			 * the measured launch rate.
+			 *
+			 * TESTED 2026-08-04 AND REVERTED: at 200 MHz DCO lane A goes
+			 * completely dead (serdes_data constant 0x55 = lane A 0x0, lane B
+			 * idle 0xF). The ADC REQUIRES the 400 MHz clock; the oversampling
+			 * is the ADC launching at half rate, not the FPGA clocking too
+			 * fast. Back to /1. */
 			adi,channel-divider = <1>;
+			adi,driver-mode = <(DRIVER_PHASE_INVERTING | DRIVER_MODE_LVDS_1_25)>;
+			adi,divider-phase = <0>;
 			adi,extended-name = "CLK";
 		};
 	};
@@ -488,13 +528,18 @@
 		clock-names = "clkin";
 		clock-output-names = "adf4350_rfout";
 
-		/* MOD = fPFD / channel-spacing = 25 MHz / 40 kHz = 625. This is what
-		 * makes 327.68 MHz land exactly; do not change it casually. */
-		adi,channel-spacing = <40000>;
-		adi,power-up-frequency = <327680000>;
+		/* ADI ZedBoard reference values (400 MHz, 100 kHz spacing). For the
+		 * Wildcat2 target of 327.68 MHz EXACTLY use channel-spacing 40 kHz:
+		 * MOD = 25 MHz / 40 kHz = 625 makes it land with zero error. */
+		adi,channel-spacing = <100000>;
+		adi,power-up-frequency = <400000000>;
 
 		adi,phase-detector-polarity-positive-enable;
-		adi,charge-pump-current = <2500>;
+		adi,charge-pump-current = <5000>;
+		adi,reference-div-factor = <1>;
+		adi,lock-detect-function-integer-n-enable;
+		adi,anti-backlash-3ns-enable;
+		adi,output-power = <1>;
 		adi,muxout-select = <6>;	/* digital lock detect, per schematic note */
 		adi,mute-till-lock-enable;
 	};
