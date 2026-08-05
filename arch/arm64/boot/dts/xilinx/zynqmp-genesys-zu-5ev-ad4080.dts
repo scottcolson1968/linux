@@ -429,15 +429,21 @@
  * IN_SEL is tied high on the eval board) -> OUT0 FPGACLK to FMC CLK1_M2C,
  * OUT2 CNV (40 MHz max), OUT3 CLK (400 MHz max). OUT1 is unused.
  *
- * Operating point CHANGED 2026-08-03 to match ADI's ZedBoard reference exactly
- * (zynq-zed-ad4080.dts), which is PROVEN to capture on this card. The point is
- * to remove our custom clock tree as a variable during bring-up:
- *   ADF4350 = 400 MHz (channel-spacing 100 kHz, as ADI)
- *   AD9508 OUT3 /1  = 400 MHz -> LVDS interface clock, PHASE_INVERTING
- *   AD9508 OUT2 /10 =  40 MHz -> CNV
- *   AD9508 OUT0 /10 =  40 MHz -> FPGACLK
+ * WILDCAT2 OPERATING POINT, restored 2026-08-04 after capture was proven at the
+ * ADI reference point (400 MHz / 40 MSPS). Only the ADF4350 frequency changes --
+ * the AD9508 dividers are already the right ones, so the 10-clocks-per-sample
+ * ratio is preserved:
+ *   ADF4350 = 327.68 MHz EXACTLY (channel-spacing 40 kHz -> MOD 625, zero error)
+ *   AD9508 OUT3 /1  = 327.68 MHz -> LVDS interface clock, PHASE_INVERTING
+ *   AD9508 OUT2 /10 =  32.768 MHz -> CNV
+ *   AD9508 OUT0 /10 =  32.768 MHz -> FPGACLK
  *   adi,num-lanes = 1: 20 bit / 1 lane / 2 (DDR) = 10 clocks per sample,
- *                      so 400 MHz / 10 = 40 MSPS, the AD4080's full rate.
+ *                      so 327.68 MHz / 10 = 32.768 MSPS, then sinc5+pf1 at
+ *                      OSR 4 (total decimation 8) -> 4.096 MSPS.
+ *
+ * CLK and CNV MUST be scaled together. Halving OUT3 alone (200 MHz DCO with CNV
+ * left at 40 MHz) was tested 2026-08-04 and killed the lanes outright: the part
+ * needed 800 Mbps of launch bandwidth while the clock could only carry 400.
  *
  * NB the PREVIOUS config was internally inconsistent and would not have aligned:
  * the tree was built for SINGLE-lane capture (CLK = 10 x fS, 327.68/32.768) but
@@ -528,11 +534,13 @@
 		clock-names = "clkin";
 		clock-output-names = "adf4350_rfout";
 
-		/* ADI ZedBoard reference values (400 MHz, 100 kHz spacing). For the
-		 * Wildcat2 target of 327.68 MHz EXACTLY use channel-spacing 40 kHz:
-		 * MOD = 25 MHz / 40 kHz = 625 makes it land with zero error. */
-		adi,channel-spacing = <100000>;
-		adi,power-up-frequency = <400000000>;
+		/* WILDCAT2 TARGET (restored 2026-08-04 once capture was proven at the
+		 * ADI reference operating point). 327.68 MHz EXACTLY: with a 25 MHz PFD
+		 * and channel-spacing 40 kHz, MOD = 25 MHz / 40 kHz = 625 and the
+		 * synthesiser lands on 327.68 MHz with ZERO frequency error, which the
+		 * power-of-two FFT frame needs. 100 kHz spacing cannot express it. */
+		adi,channel-spacing = <40000>;
+		adi,power-up-frequency = <327680000>;
 
 		adi,phase-detector-polarity-positive-enable;
 		adi,charge-pump-current = <5000>;
